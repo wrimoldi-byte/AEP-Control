@@ -9,4 +9,11 @@ public sealed class FlightData
     public int Premium { get; set; }
     public int Economy { get; set; }
     public int Total => Premium + Economy;
+
+    public int WCHR { get; set; }
+    public int WCHS { get; set; }
+    public int WCHC { get; set; }
+    public int AVIH { get; set; }
+    public int INF { get; set; }
+    public bool EspecialesLeidos { get; set; }
 }
