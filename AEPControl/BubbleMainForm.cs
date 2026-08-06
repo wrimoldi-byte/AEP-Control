@@ -18,7 +18,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v0.5";
+        Text = "AEP Control v0.6";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1180, 700);
         TopMost = true;
@@ -99,7 +99,14 @@ public sealed class BubbleMainForm : Form
         var parsed = FlightParser.Parse(text);
         if (parsed.Count == 0)
         {
-            _status.Text = "No detecté vuelos. Seleccioná una zona más ajustada.";
+            _status.Text = "El OCR leyó texto, pero no reconoció vuelos. Revisá el diagnóstico.";
+            MessageBox.Show(
+                "El OCR leyó la pantalla, pero el formato no coincidió con la tabla de vuelos.\n\n" +
+                "Texto bruto leído:\n\n" + Truncate(text, 1800) + "\n\n" +
+                "Las capturas y el informe completo quedaron guardados en:\n" + OcrService.LastDiagnosticFolder,
+                "Diagnóstico OCR — AEP Control",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
             return;
         }
 
@@ -114,6 +121,9 @@ public sealed class BubbleMainForm : Form
         _index = 0;
         PrepareFlight();
     }
+
+    private static string Truncate(string value, int maxLength) =>
+        value.Length <= maxLength ? value : value[..maxLength] + "\n[…]";
 
     private void PrepareFlight()
     {
@@ -202,6 +212,7 @@ public sealed class BubbleMainForm : Form
             using var bmp = new Bitmap(selector.SelectedArea.Width, selector.SelectedArea.Height);
             using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(selector.SelectedArea.Location, Point.Empty, selector.SelectedArea.Size);
             Show(); Activate();
+            _status.Text = "Leyendo pantalla con OCR y generando diagnóstico…";
             return await OcrService.ReadAsync(bmp);
         }
         catch (Exception ex)
