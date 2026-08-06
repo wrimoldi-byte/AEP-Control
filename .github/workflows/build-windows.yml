@@ -16,6 +16,7 @@ jobs:
   build:
     name: Generar EXE win-x64
     runs-on: windows-latest
+    timeout-minutes: 15
 
     steps:
       - name: Descargar código
