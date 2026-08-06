@@ -34,10 +34,7 @@ public static class FlightParser
                 result.Add(data);
         }
 
-        return result
-            .OrderBy(x => x.Hora)
-            .ThenBy(x => x.Vuelo)
-            .ToList();
+        return result.OrderBy(x => x.Hora).ThenBy(x => x.Vuelo).ToList();
     }
 
     private static FlightData? TryParseWindow(string window)
@@ -89,9 +86,9 @@ public static class FlightParser
         var value = text.ToUpperInvariant()
             .Replace('\r', '\n')
             .Replace('—', '-')
-            .Replace('–', '-')
-            .Replace('O', '0');
+            .Replace('–', '-');
 
+        value = Regex.Replace(value, @"(?<=\d)[OQ](?=\d)", "0");
         value = Regex.Replace(value, @"(?<=\d)[IL](?=\d)", "1");
         value = Regex.Replace(value, @"[ \t]+", " ");
         value = Regex.Replace(value, @"\n+", "\n");
