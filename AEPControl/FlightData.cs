@@ -2,6 +2,7 @@ namespace AEPControl;
 
 public sealed class FlightData
 {
+    public string Movimiento { get; set; } = "";
     public string Vuelo { get; set; } = "";
     public string Destino { get; set; } = "";
     public string Hora { get; set; } = "";
