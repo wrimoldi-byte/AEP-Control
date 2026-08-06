@@ -6,94 +6,184 @@ public sealed class MainForm : Form
 {
     private readonly BindingList<FlightData> _flights = new();
     private readonly DataGridView _grid = new();
+    private readonly Label _stepTitle = new();
+    private readonly Label _instruction = new();
     private readonly Label _status = new();
-    private readonly Button _captureButton = new();
+    private readonly Button _primaryButton = new();
+    private int _activeFlightIndex = -1;
 
     public MainForm()
     {
-        Text = "AEP Control v0.1";
+        Text = "AEP Control v0.2";
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(920, 520);
-        Size = new Size(1050, 640);
+        MinimumSize = new Size(1050, 600);
+        Size = new Size(1180, 700);
         TopMost = true;
 
-        var title = new Label
-        {
-            Text = "AEP Control — Vuelos del siguiente turno",
-            Dock = DockStyle.Top,
-            Height = 52,
-            Font = new Font("Segoe UI", 16, FontStyle.Bold),
-            Padding = new Padding(14, 12, 0, 0)
-        };
+        _stepTitle.Dock = DockStyle.Top;
+        _stepTitle.Height = 48;
+        _stepTitle.Font = new Font("Segoe UI", 16, FontStyle.Bold);
+        _stepTitle.Padding = new Padding(14, 10, 0, 0);
 
-        _captureButton.Text = "Capturar tabla de vuelos";
-        _captureButton.AutoSize = true;
-        _captureButton.Padding = new Padding(10, 6, 10, 6);
-        _captureButton.Click += async (_, _) => await CaptureAndReadAsync();
+        _instruction.Dock = DockStyle.Top;
+        _instruction.Height = 58;
+        _instruction.Font = new Font("Segoe UI", 10);
+        _instruction.Padding = new Padding(14, 6, 14, 0);
 
-        var clearButton = new Button { Text = "Limpiar", AutoSize = true, Padding = new Padding(10, 6, 10, 6) };
-        clearButton.Click += (_, _) => _flights.Clear();
+        _primaryButton.AutoSize = true;
+        _primaryButton.Padding = new Padding(12, 7, 12, 7);
+        _primaryButton.Click += async (_, _) => await HandlePrimaryActionAsync();
 
-        _status.Text = "Listo. Tocá Capturar y marcá con el mouse solo la tabla de Sabre.";
+        var clearButton = new Button { Text = "Reiniciar", AutoSize = true, Padding = new Padding(10, 7, 10, 7) };
+        clearButton.Click += (_, _) => ResetWorkflow();
+
         _status.AutoSize = true;
-        _status.Padding = new Padding(12, 10, 0, 0);
+        _status.Padding = new Padding(12, 11, 0, 0);
 
         var toolbar = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 58,
+            Height = 62,
             Padding = new Padding(12, 8, 12, 4),
             FlowDirection = FlowDirection.LeftToRight
         };
-        toolbar.Controls.Add(_captureButton);
+        toolbar.Controls.Add(_primaryButton);
         toolbar.Controls.Add(clearButton);
         toolbar.Controls.Add(_status);
 
+        ConfigureGrid();
+
+        Controls.Add(_grid);
+        Controls.Add(toolbar);
+        Controls.Add(_instruction);
+        Controls.Add(_stepTitle);
+
+        ResetWorkflow();
+    }
+
+    private void ConfigureGrid()
+    {
         _grid.Dock = DockStyle.Fill;
         _grid.AutoGenerateColumns = false;
         _grid.DataSource = _flights;
         _grid.AllowUserToAddRows = false;
-        _grid.AllowUserToDeleteRows = true;
+        _grid.AllowUserToDeleteRows = false;
         _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         _grid.RowHeadersVisible = false;
         _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-        _grid.Columns.Add(Column("Vuelo", nameof(FlightData.Vuelo)));
-        _grid.Columns.Add(Column("Destino", nameof(FlightData.Destino)));
-        _grid.Columns.Add(Column("Hora", nameof(FlightData.Hora)));
-        _grid.Columns.Add(Column("Equipo", nameof(FlightData.Equipo)));
-        _grid.Columns.Add(Column("Premium", nameof(FlightData.Premium)));
-        _grid.Columns.Add(Column("Economy", nameof(FlightData.Economy)));
-        _grid.Columns.Add(new DataGridViewTextBoxColumn
-        {
-            HeaderText = "Total",
-            DataPropertyName = nameof(FlightData.Total),
-            ReadOnly = true,
-            FillWeight = 75
-        });
 
-        Controls.Add(_grid);
-        Controls.Add(toolbar);
-        Controls.Add(title);
+        _grid.Columns.Add(Column("Vuelo", nameof(FlightData.Vuelo), 95));
+        _grid.Columns.Add(Column("Destino", nameof(FlightData.Destino), 75));
+        _grid.Columns.Add(Column("Hora", nameof(FlightData.Hora), 70));
+        _grid.Columns.Add(Column("Equipo", nameof(FlightData.Equipo), 65));
+        _grid.Columns.Add(Column("Premium", nameof(FlightData.Premium), 70));
+        _grid.Columns.Add(Column("Economy", nameof(FlightData.Economy), 75));
+        _grid.Columns.Add(Column("WCHR", nameof(FlightData.WCHR), 55));
+        _grid.Columns.Add(Column("WCHS", nameof(FlightData.WCHS), 55));
+        _grid.Columns.Add(Column("WCHC", nameof(FlightData.WCHC), 55));
+        _grid.Columns.Add(Column("AVIH", nameof(FlightData.AVIH), 55));
+        _grid.Columns.Add(Column("INF", nameof(FlightData.INF), 50));
     }
 
-    private static DataGridViewTextBoxColumn Column(string title, string property) => new()
+    private static DataGridViewTextBoxColumn Column(string title, string property, float weight) => new()
     {
         HeaderText = title,
         DataPropertyName = property,
-        FillWeight = title == "Vuelo" ? 110 : 85
+        FillWeight = weight
     };
 
-    private async Task CaptureAndReadAsync()
+    private void ResetWorkflow()
+    {
+        _flights.Clear();
+        _activeFlightIndex = -1;
+        _stepTitle.Text = "Paso 1 — Escanear vuelos de llegada";
+        _instruction.Text = "Abrí en Sabre la lista de vuelos de llegada del siguiente turno. Luego tocá el botón y seleccioná solamente la tabla.";
+        _primaryButton.Text = "Escanear vuelos de llegada";
+        _status.Text = "Esperando la primera lectura.";
+    }
+
+    private async Task HandlePrimaryActionAsync()
+    {
+        if (_activeFlightIndex < 0)
+            await ScanArrivalFlightsAsync();
+        else
+            await ScanSpecialsForActiveFlightAsync();
+    }
+
+    private async Task ScanArrivalFlightsAsync()
+    {
+        var text = await CaptureOcrAsync("Seleccioná la tabla de vuelos de llegada. Esc cancela.");
+        if (text is null) return;
+
+        var parsed = FlightParser.Parse(text);
+        _flights.Clear();
+        foreach (var flight in parsed) _flights.Add(flight);
+
+        if (_flights.Count == 0)
+        {
+            _status.Text = "No detecté vuelos. Probá seleccionando una zona más ajustada.";
+            return;
+        }
+
+        _activeFlightIndex = 0;
+        PrepareActiveFlight();
+    }
+
+    private void PrepareActiveFlight()
+    {
+        var flight = _flights[_activeFlightIndex];
+        _grid.ClearSelection();
+        _grid.Rows[_activeFlightIndex].Selected = true;
+        _grid.FirstDisplayedScrollingRowIndex = _activeFlightIndex;
+
+        _stepTitle.Text = $"Paso 2 — Especiales del vuelo {flight.Vuelo}";
+        _instruction.Text = $"Entrá en el vuelo {flight.Vuelo} en Sabre, escribí SS y abrí SusEdit. Cuando aparezca la lista de pasajeros, escaneá esa zona. Se contarán WCHR, WCHS, WCHC, AVIH e INF.";
+        _primaryButton.Text = $"Escanear SS de {flight.Vuelo}";
+        _status.Text = $"Vuelo {_activeFlightIndex + 1} de {_flights.Count}.";
+    }
+
+    private async Task ScanSpecialsForActiveFlightAsync()
+    {
+        var flight = _flights[_activeFlightIndex];
+        var text = await CaptureOcrAsync($"Seleccioná la lista SS / SusEdit de {flight.Vuelo}.");
+        if (text is null) return;
+
+        var counts = SpecialParser.Parse(text);
+        flight.WCHR = counts.WCHR;
+        flight.WCHS = counts.WCHS;
+        flight.WCHC = counts.WCHC;
+        flight.AVIH = counts.AVIH;
+        flight.INF = counts.INF;
+        flight.EspecialesLeidos = true;
+        _grid.Refresh();
+
+        _status.Text = $"{flight.Vuelo}: WCHR {flight.WCHR}, WCHS {flight.WCHS}, WCHC {flight.WCHC}, AVIH {flight.AVIH}, INF {flight.INF}.";
+
+        if (_activeFlightIndex + 1 < _flights.Count)
+        {
+            _activeFlightIndex++;
+            PrepareActiveFlight();
+        }
+        else
+        {
+            _stepTitle.Text = "Especiales de llegadas completados";
+            _instruction.Text = "Se procesaron todos los vuelos de llegada. Revisá y corregí cualquier cantidad antes de continuar con el próximo módulo.";
+            _primaryButton.Text = "Volver a escanear último vuelo";
+            _activeFlightIndex = _flights.Count - 1;
+        }
+    }
+
+    private async Task<string?> CaptureOcrAsync(string message)
     {
         try
         {
-            _captureButton.Enabled = false;
-            _status.Text = "Seleccioná la tabla. Esc cancela.";
+            _primaryButton.Enabled = false;
+            _status.Text = message;
             Hide();
             await Task.Delay(250);
 
             using var selector = new SelectionForm();
-            if (selector.ShowDialog() != DialogResult.OK) return;
+            if (selector.ShowDialog() != DialogResult.OK) return null;
 
             using var bitmap = new Bitmap(selector.SelectedArea.Width, selector.SelectedArea.Height);
             using (var graphics = Graphics.FromImage(bitmap))
@@ -102,27 +192,19 @@ public sealed class MainForm : Form
             Show();
             Activate();
             _status.Text = "Leyendo pantalla con OCR…";
-
-            var text = await OcrService.ReadAsync(bitmap);
-            var parsed = FlightParser.Parse(text);
-
-            _flights.Clear();
-            foreach (var flight in parsed) _flights.Add(flight);
-
-            _status.Text = parsed.Count > 0
-                ? $"Listo: {parsed.Count} vuelos detectados. Podés corregir las celdas."
-                : "No detecté filas. Probá seleccionando solo la tabla y con mayor zoom.";
+            return await OcrService.ReadAsync(bitmap);
         }
         catch (Exception ex)
         {
             Show();
             MessageBox.Show($"No se pudo leer la pantalla.\n\n{ex.Message}", "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Error);
             _status.Text = "Error durante la lectura.";
+            return null;
         }
         finally
         {
             Show();
-            _captureButton.Enabled = true;
+            _primaryButton.Enabled = true;
         }
     }
 }
