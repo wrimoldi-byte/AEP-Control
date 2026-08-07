@@ -103,7 +103,7 @@ public sealed class BubbleMainForm : Form
         var area = selector.SelectedArea;
         var unique = new Dictionary<string, FlightData>(StringComparer.OrdinalIgnoreCase);
         _cts = new CancellationTokenSource();
-        _bubble = new BubbleForm($"Vuelos de {movement.ToLowerInvariant()}", true);
+        _bubble = new BubbleForm($"Vuelos de {movement.ToLowerInvariant()}", BubbleMode.FlightList);
         _bubble.FinishRequested += (_, _) => _cts.Cancel();
         _bubble.Show();
 
@@ -158,9 +158,6 @@ public sealed class BubbleMainForm : Form
         _status.Text = $"Lista terminada: {_batch.Count} vuelos únicos.";
         PrepareFlight();
     }
-
-    private static string Truncate(string value, int maxLength) =>
-        value.Length <= maxLength ? value : value[..maxLength] + "\n[…]";
 
     private void PrepareFlight()
     {
@@ -238,41 +235,63 @@ public sealed class BubbleMainForm : Form
         }
     }
 
-    private async Task<string?> CaptureAsync()
-    {
-        try
-        {
-            Hide();
-            await Task.Delay(250);
-            using var selector = new SelectionForm();
-            if (selector.ShowDialog() != DialogResult.OK)
-            {
-                Show();
-                Activate();
-                _status.Text = "Lectura de documentación cancelada.";
-                return null;
-            }
-            using var bmp = new Bitmap(selector.SelectedArea.Width, selector.SelectedArea.Height);
-            using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(selector.SelectedArea.Location, Point.Empty, selector.SelectedArea.Size);
-            Show(); Activate();
-            _status.Text = "Leyendo pantalla con OCR y generando diagnóstico…";
-            return await OcrService.ReadAsync(bmp);
-        }
-        catch (Exception ex)
-        {
-            Show();
-            MessageBox.Show(ex.Message, "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return null;
-        }
-    }
-
     private async Task ReadPassengerDocumentsAsync()
     {
-        _status.Text = "Seleccioná en Sabre las líneas de documentación DOCS/OB.";
-        var text = await CaptureAsync();
-        if (text is null) return;
+        _status.Text = "Seleccioná en Sabre el área de documentación DOCS/OB y hacé scroll lentamente.";
+        Hide();
+        await Task.Delay(250);
+        using var selector = new SelectionForm();
+        if (selector.ShowDialog() != DialogResult.OK)
+        {
+            Show();
+            Activate();
+            _status.Text = "Lectura de documentación cancelada.";
+            return;
+        }
 
-        var documents = PassengerDocumentParser.Parse(text);
+        var area = selector.SelectedArea;
+        var unique = new Dictionary<string, PassengerDocument>(StringComparer.OrdinalIgnoreCase);
+        _cts = new CancellationTokenSource();
+        _bubble = new BubbleForm("Documentación PAX", BubbleMode.PassengerDocuments);
+        _bubble.FinishRequested += (_, _) => _cts.Cancel();
+        _bubble.Show();
+
+        try
+        {
+            while (!_cts.IsCancellationRequested)
+            {
+                using var bmp = new Bitmap(area.Width, area.Height);
+                using (var g = Graphics.FromImage(bmp))
+                    g.CopyFromScreen(area.Location, Point.Empty, area.Size);
+
+                var text = await OcrService.ReadContinuousAsync(bmp);
+                foreach (var document in PassengerDocumentParser.Parse(text))
+                {
+                    var key = $"{document.DocumentType}|{document.DocumentNumber}";
+                    unique[key] = document;
+                }
+
+                _bubble.UpdateDocumentCount(unique.Count);
+                await Task.Delay(900, _cts.Token);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _bubble?.Close();
+            _bubble = null;
+            Show();
+            Activate();
+        }
+
+        var documents = unique.Values
+            .OrderBy(document => document.Surname)
+            .ThenBy(document => document.GivenNames)
+            .ToList();
         if (documents.Count == 0)
         {
             _status.Text = "No detecté documentación. Ajustá la selección para incluir las líneas completas.";
