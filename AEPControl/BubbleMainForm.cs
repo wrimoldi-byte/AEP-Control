@@ -18,7 +18,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v0.7";
+        Text = "AEP Control v0.8";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1180, 700);
         TopMost = true;
