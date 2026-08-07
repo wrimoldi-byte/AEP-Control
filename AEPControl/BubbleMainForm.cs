@@ -52,11 +52,10 @@ public sealed class BubbleMainForm : Form
         _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         AddColumn("Tipo", nameof(FlightData.Movimiento));
         AddColumn("Vuelo", nameof(FlightData.Vuelo));
-        AddColumn("Destino", nameof(FlightData.Destino));
+        AddColumn("Origen / Destino", nameof(FlightData.Destino));
         AddColumn("Hora", nameof(FlightData.Hora));
+        AddColumn("Booking", nameof(FlightData.Booking));
         AddColumn("Equipo", nameof(FlightData.Equipo));
-        AddColumn("Premium", nameof(FlightData.Premium));
-        AddColumn("Economy", nameof(FlightData.Economy));
         AddColumn("WCHR", nameof(FlightData.WCHR));
         AddColumn("WCHS", nameof(FlightData.WCHS));
         AddColumn("WCHC", nameof(FlightData.WCHC));
@@ -79,8 +78,8 @@ public sealed class BubbleMainForm : Form
         _index = -1;
         _action.Visible = true;
         _title.Text = "Paso 1 — Vuelos de llegada";
-        _help.Text = "Abrí la lista de llegadas en Sabre y seleccioná solamente la tabla.";
-        _action.Text = "Escanear vuelos de llegada";
+        _help.Text = "Abrí la lista de llegadas en Sabre. Marcá la tabla una vez y hacé scroll lentamente hasta el final.";
+        _action.Text = "Iniciar lectura continua de llegadas";
         _status.Text = "Esperando lectura.";
         Show();
     }
@@ -94,31 +93,67 @@ public sealed class BubbleMainForm : Form
 
     private async Task ScanFlightsAsync(string movement, int nextStage)
     {
-        var text = await CaptureAsync();
-        if (text is null) return;
-        var parsed = FlightParser.Parse(text);
-        if (parsed.Count == 0)
+        Hide();
+        await Task.Delay(250);
+        using var selector = new SelectionForm();
+        if (selector.ShowDialog() != DialogResult.OK) { Show(); return; }
+
+        var area = selector.SelectedArea;
+        var unique = new Dictionary<string, FlightData>(StringComparer.OrdinalIgnoreCase);
+        _cts = new CancellationTokenSource();
+        _bubble = new BubbleForm($"Vuelos de {movement.ToLowerInvariant()}", true);
+        _bubble.FinishRequested += (_, _) => _cts.Cancel();
+        _bubble.Show();
+
+        try
         {
-            _status.Text = "El OCR leyó texto, pero no reconoció vuelos. Revisá el diagnóstico.";
-            MessageBox.Show(
-                "El OCR leyó la pantalla, pero el formato no coincidió con la tabla de vuelos.\n\n" +
-                "Texto bruto leído:\n\n" + Truncate(text, 1800) + "\n\n" +
-                "Las capturas y el informe completo quedaron guardados en:\n" + OcrService.LastDiagnosticFolder,
-                "Diagnóstico OCR — AEP Control",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            while (!_cts.IsCancellationRequested)
+            {
+                using var bmp = new Bitmap(area.Width, area.Height);
+                using (var g = Graphics.FromImage(bmp))
+                    g.CopyFromScreen(area.Location, Point.Empty, area.Size);
+
+                var text = await OcrService.ReadContinuousAsync(bmp);
+                foreach (var flight in FlightParser.Parse(text))
+                {
+                    flight.Movimiento = movement;
+                    var key = $"{flight.Vuelo}|{flight.Hora}";
+                    unique[key] = flight;
+                }
+
+                _bubble.UpdateFlightCount(unique.Count);
+                await Task.Delay(900, _cts.Token);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _bubble?.Close();
+            _bubble = null;
+            Show();
+            Activate();
+        }
+
+        if (unique.Count == 0)
+        {
+            _status.Text = "No detecté vuelos. Seleccioná una zona más ajustada.";
             return;
         }
 
         _batch.Clear();
-        foreach (var f in parsed)
+        foreach (var flight in unique.Values.OrderBy(x => x.Hora).ThenBy(x => x.Vuelo))
         {
-            f.Movimiento = movement;
-            _flights.Add(f);
-            _batch.Add(f);
+            _flights.Add(flight);
+            _batch.Add(flight);
         }
+
         _stage = nextStage;
         _index = 0;
+        _status.Text = $"Lista terminada: {_batch.Count} vuelos únicos.";
         PrepareFlight();
     }
 
