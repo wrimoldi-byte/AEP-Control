@@ -10,7 +10,7 @@ public sealed class BubbleForm : Form
 
     public event EventHandler? FinishRequested;
 
-    public BubbleForm(string flight)
+    public BubbleForm(string flight, bool flightListMode = false)
     {
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
@@ -39,9 +39,11 @@ public sealed class BubbleForm : Form
         _counts.Font = new Font("Segoe UI", 9);
         _counts.Location = new Point(18, 42);
         _counts.Size = new Size(214, 34);
-        _counts.Text = "WCHR 0 · WCHS 0 · WCHC 0\nAVIH 0 · INF 0";
+        _counts.Text = flightListMode
+            ? "Vuelos únicos: 0\nHacé scroll lentamente"
+            : "WCHR 0 · WCHS 0 · WCHC 0\nAVIH 0 · INF 0";
 
-        _finish.Text = "Finalizar y seguir";
+        _finish.Text = flightListMode ? "Finalizar lista" : "Finalizar y seguir";
         _finish.Location = new Point(18, 80);
         _finish.Size = new Size(214, 27);
         _finish.Click += (_, _) => FinishRequested?.Invoke(this, EventArgs.Empty);
@@ -68,6 +70,17 @@ public sealed class BubbleForm : Form
 
         _flight.Text = flight.Vuelo;
         _counts.Text = $"WCHR {flight.WCHR} · WCHS {flight.WCHS} · WCHC {flight.WCHC}\nAVIH {flight.AVIH} · INF {flight.INF} · filas {uniqueRows}";
+    }
+
+    public void UpdateFlightCount(int count)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => UpdateFlightCount(count));
+            return;
+        }
+
+        _counts.Text = $"Vuelos únicos: {count}\nHacé scroll lentamente";
     }
 
     public void SetStopped()
