@@ -90,6 +90,19 @@ public static class OcrService
         return LastRawText;
     }
 
+    public static async Task<string> ReadContinuousAsync(Bitmap bitmap)
+    {
+        if (bitmap.Width < 20 || bitmap.Height < 20)
+            return string.Empty;
+
+        using var enhanced = Enhance(bitmap, 2, 1.65f, false);
+        var engine = CreateEngines().FirstOrDefault().Engine;
+        if (engine is null)
+            throw new InvalidOperationException("Windows no tiene ningún idioma OCR instalado.");
+
+        return await RecognizeAsync(enhanced, engine);
+    }
+
     private static IEnumerable<(string Language, OcrEngine Engine)> CreateEngines()
     {
         var created = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
