@@ -10,6 +10,7 @@ public sealed class FlightData
     public int Premium { get; set; }
     public int Economy { get; set; }
     public int Total => Premium + Economy;
+    public string Booking => $"{Premium:000}/{Economy:000}";
 
     public int WCHR { get; set; }
     public int WCHS { get; set; }
