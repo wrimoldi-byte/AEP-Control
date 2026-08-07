@@ -18,7 +18,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v0.6";
+        Text = "AEP Control v0.7";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1180, 700);
         TopMost = true;
@@ -38,11 +38,13 @@ public sealed class BubbleMainForm : Form
 
         var reset = new Button { Text = "Reiniciar", AutoSize = true, Padding = new Padding(10, 7, 10, 7) };
         reset.Click += (_, _) => ResetFlow();
+        var readDocuments = new Button { Text = "Leer documentación de PAX", AutoSize = true, Padding = new Padding(10, 7, 10, 7) };
+        readDocuments.Click += async (_, _) => await ReadPassengerDocumentsAsync();
         _status.AutoSize = true;
         _status.Padding = new Padding(12, 11, 0, 0);
 
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 62, Padding = new Padding(12, 8, 12, 4) };
-        bar.Controls.AddRange(new Control[] { _action, reset, _status });
+        bar.Controls.AddRange(new Control[] { _action, readDocuments, reset, _status });
 
         _grid.Dock = DockStyle.Fill;
         _grid.AutoGenerateColumns = false;
@@ -243,7 +245,13 @@ public sealed class BubbleMainForm : Form
             Hide();
             await Task.Delay(250);
             using var selector = new SelectionForm();
-            if (selector.ShowDialog() != DialogResult.OK) return null;
+            if (selector.ShowDialog() != DialogResult.OK)
+            {
+                Show();
+                Activate();
+                _status.Text = "Lectura de documentación cancelada.";
+                return null;
+            }
             using var bmp = new Bitmap(selector.SelectedArea.Width, selector.SelectedArea.Height);
             using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(selector.SelectedArea.Location, Point.Empty, selector.SelectedArea.Size);
             Show(); Activate();
@@ -256,5 +264,29 @@ public sealed class BubbleMainForm : Form
             MessageBox.Show(ex.Message, "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return null;
         }
+    }
+
+    private async Task ReadPassengerDocumentsAsync()
+    {
+        _status.Text = "Seleccioná en Sabre las líneas de documentación DOCS/OB.";
+        var text = await CaptureAsync();
+        if (text is null) return;
+
+        var documents = PassengerDocumentParser.Parse(text);
+        if (documents.Count == 0)
+        {
+            _status.Text = "No detecté documentación. Ajustá la selección para incluir las líneas completas.";
+            MessageBox.Show(
+                "No se encontró una línea con el formato esperado:\n\n" +
+                "I o P / país emisor / número / nacionalidad / nacimiento / sexo / vencimiento / apellido / nombres",
+                "Documentación de PAX",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        _status.Text = $"Documentación detectada: {documents.Count} PAX.";
+        using var results = new PassengerDocumentsForm(documents);
+        results.ShowDialog(this);
     }
 }
