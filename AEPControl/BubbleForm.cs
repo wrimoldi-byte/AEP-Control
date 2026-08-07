@@ -1,5 +1,12 @@
 namespace AEPControl;
 
+public enum BubbleMode
+{
+    SpecialPassengers,
+    FlightList,
+    PassengerDocuments
+}
+
 public sealed class BubbleForm : Form
 {
     private readonly Label _flight = new();
@@ -10,7 +17,7 @@ public sealed class BubbleForm : Form
 
     public event EventHandler? FinishRequested;
 
-    public BubbleForm(string flight, bool flightListMode = false)
+    public BubbleForm(string flight, BubbleMode mode = BubbleMode.SpecialPassengers)
     {
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
@@ -39,11 +46,19 @@ public sealed class BubbleForm : Form
         _counts.Font = new Font("Segoe UI", 9);
         _counts.Location = new Point(18, 42);
         _counts.Size = new Size(214, 34);
-        _counts.Text = flightListMode
-            ? "Vuelos únicos: 0\nHacé scroll lentamente"
-            : "WCHR 0 · WCHS 0 · WCHC 0\nAVIH 0 · INF 0";
+        _counts.Text = mode switch
+        {
+            BubbleMode.FlightList => "Vuelos únicos: 0\nHacé scroll lentamente",
+            BubbleMode.PassengerDocuments => "Documentos únicos: 0\nHacé scroll lentamente",
+            _ => "WCHR 0 · WCHS 0 · WCHC 0\nAVIH 0 · INF 0"
+        };
 
-        _finish.Text = flightListMode ? "Finalizar lista" : "Finalizar y seguir";
+        _finish.Text = mode switch
+        {
+            BubbleMode.FlightList => "Finalizar lista",
+            BubbleMode.PassengerDocuments => "Finalizar documentación",
+            _ => "Finalizar y seguir"
+        };
         _finish.Location = new Point(18, 80);
         _finish.Size = new Size(214, 27);
         _finish.Click += (_, _) => FinishRequested?.Invoke(this, EventArgs.Empty);
@@ -81,6 +96,17 @@ public sealed class BubbleForm : Form
         }
 
         _counts.Text = $"Vuelos únicos: {count}\nHacé scroll lentamente";
+    }
+
+    public void UpdateDocumentCount(int count)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => UpdateDocumentCount(count));
+            return;
+        }
+
+        _counts.Text = $"Documentos únicos: {count}\nHacé scroll lentamente";
     }
 
     public void SetStopped()
