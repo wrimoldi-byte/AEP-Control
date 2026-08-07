@@ -17,8 +17,74 @@ public static class FlightParser
 
     public static List<FlightData> Parse(string text)
     {
-        var result = new List<FlightData>();
         var normalized = Normalize(text);
+
+        // Windows OCR reads this Sabre grid by complete columns rather than by rows.
+        // Parse and zip those columns first; retain the previous row/window parser as fallback.
+        var columnResult = ParseColumnTable(normalized);
+        if (columnResult.Count > 0) return columnResult;
+
+        return ParseRowWindows(normalized);
+    }
+
+    private static List<FlightData> ParseColumnTable(string text)
+    {
+        var flightSection = ExtractSection(text, @"\bVUELO\b", @"\bFECHA\b");
+        var destinationSection = ExtractSection(text, @"\b(?:ORIGEN|DESTINO)\b", @"\bPUERTA\b");
+        var timeSection = ExtractSection(text, @"\bHORA\s+(?:LLEGADA|SALIDA)\b", @"\bETA\b");
+        var bookingSection = ExtractSection(text, @"\bCANTIDAD\s+B\w*\b", @"\z");
+
+        if (flightSection is null || destinationSection is null || timeSection is null || bookingSection is null)
+            return new List<FlightData>();
+
+        var flights = Regex.Matches(flightSection, @"\b\d{3,4}\b")
+            .Select(m => m.Value).ToList();
+        var destinations = Regex.Matches(destinationSection, @"\b[A-Z]{3}\b")
+            .Select(m => m.Value)
+            .Where(value => !IgnoredThreeLetterWords.Contains(value))
+            .ToList();
+        var times = Regex.Matches(timeSection, @"\b(?:[01]\d|2[0-3])[0-5]\d\b")
+            .Select(m => FormatTime(m.Value)).ToList();
+        var bookings = BookingRegex.Matches(bookingSection)
+            .Select(m => (
+                Premium: int.Parse(m.Groups["premium"].Value),
+                Economy: int.Parse(m.Groups["economy"].Value)))
+            .ToList();
+
+        // Do not shift data between flights when OCR misses a value in any column.
+        if (flights.Count == 0 || destinations.Count != flights.Count ||
+            times.Count != flights.Count || bookings.Count != flights.Count)
+            return new List<FlightData>();
+
+        var result = new List<FlightData>(flights.Count);
+        for (var i = 0; i < flights.Count; i++)
+        {
+            result.Add(new FlightData
+            {
+                Vuelo = $"LA{flights[i]}",
+                Destino = destinations[i],
+                Hora = times[i],
+                Equipo = string.Empty,
+                Premium = bookings[i].Premium,
+                Economy = bookings[i].Economy
+            });
+        }
+
+        return result.OrderBy(x => x.Hora).ThenBy(x => x.Vuelo).ToList();
+    }
+
+    private static string? ExtractSection(string text, string startPattern, string endPattern)
+    {
+        var match = Regex.Match(
+            text,
+            $@"(?:{startPattern})(?<value>.*?)(?={endPattern})",
+            RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        return match.Success ? match.Groups["value"].Value : null;
+    }
+
+    private static List<FlightData> ParseRowWindows(string normalized)
+    {
+        var result = new List<FlightData>();
         var lines = normalized.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         for (var i = 0; i < lines.Length; i++)
@@ -51,19 +117,21 @@ public static class FlightParser
         var destination = FindDestination(afterFlight, flightMatch.Length, timeMatch.Index);
         if (destination is null) return null;
 
-        var rawTime = timeMatch.Groups["time"].Value.Replace('.', ':');
-        if (!rawTime.Contains(':'))
-            rawTime = rawTime.PadLeft(4, '0').Insert(2, ":");
-
         return new FlightData
         {
             Vuelo = $"LA{flightMatch.Groups["flight"].Value}",
             Destino = destination,
-            Hora = rawTime,
+            Hora = FormatTime(timeMatch.Groups["time"].Value),
             Equipo = equipmentMatch.Groups["equip"].Value,
             Premium = int.Parse(bookingMatch.Groups["premium"].Value),
             Economy = int.Parse(bookingMatch.Groups["economy"].Value)
         };
+    }
+
+    private static string FormatTime(string rawTime)
+    {
+        var value = rawTime.Replace('.', ':');
+        return value.Contains(':') ? value : value.PadLeft(4, '0').Insert(2, ":");
     }
 
     private static string? FindDestination(string text, int searchStart, int searchEnd)
