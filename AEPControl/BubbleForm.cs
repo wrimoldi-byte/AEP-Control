@@ -49,7 +49,7 @@ public sealed class BubbleForm : Form
         _counts.Text = mode switch
         {
             BubbleMode.FlightList => "Vuelos únicos: 0\nHacé scroll lentamente",
-            BubbleMode.PassengerDocuments => "Documentos únicos: 0\nHacé scroll lentamente",
+            BubbleMode.PassengerDocuments => "Documentos únicos: 0\nOCR continuo · pasada 0",
             _ => "WCHR 0 · WCHS 0 · WCHC 0\nAVIH 0 · INF 0"
         };
 
@@ -98,15 +98,16 @@ public sealed class BubbleForm : Form
         _counts.Text = $"Vuelos únicos: {count}\nHacé scroll lentamente";
     }
 
-    public void UpdateDocumentCount(int count)
+    public void UpdateDocumentCount(int count, int pass = 0)
     {
         if (InvokeRequired)
         {
-            BeginInvoke(() => UpdateDocumentCount(count));
+            BeginInvoke(() => UpdateDocumentCount(count, pass));
             return;
         }
 
-        _counts.Text = $"Documentos únicos: {count}\nHacé scroll lentamente";
+        _state.Text = pass % 2 == 0 ? "● Leyendo" : "◉ Leyendo";
+        _counts.Text = $"Documentos únicos: {count}\nOCR continuo · pasada {pass}";
     }
 
     public void SetStopped()
