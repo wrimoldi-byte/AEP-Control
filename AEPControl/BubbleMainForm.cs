@@ -11,6 +11,7 @@ public sealed class BubbleMainForm : Form
     private readonly Label _help = new();
     private readonly Label _status = new();
     private readonly Button _action = new();
+    private readonly Button _export = new();
     private int _stage;
     private int _index = -1;
     private CancellationTokenSource? _cts;
@@ -18,7 +19,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v1.2";
+        Text = "AEP Control v1.3";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1180, 700);
         TopMost = true;
@@ -36,6 +37,12 @@ public sealed class BubbleMainForm : Form
         _action.Padding = new Padding(12, 7, 12, 7);
         _action.Click += async (_, _) => await ActAsync();
 
+        _export.Text = "Exportar Excel";
+        _export.AutoSize = true;
+        _export.Padding = new Padding(10, 7, 10, 7);
+        _export.Enabled = false;
+        _export.Click += (_, _) => ExportExcel();
+
         var reset = new Button { Text = "Reiniciar", AutoSize = true, Padding = new Padding(10, 7, 10, 7) };
         reset.Click += (_, _) => ResetFlow();
         var readDocuments = new Button { Text = "Leer documentación de PAX", AutoSize = true, Padding = new Padding(10, 7, 10, 7) };
@@ -44,7 +51,7 @@ public sealed class BubbleMainForm : Form
         _status.Padding = new Padding(12, 11, 0, 0);
 
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 62, Padding = new Padding(12, 8, 12, 4) };
-        bar.Controls.AddRange(new Control[] { _action, readDocuments, reset, _status });
+        bar.Controls.AddRange(new Control[] { _action, readDocuments, _export, reset, _status });
 
         _grid.Dock = DockStyle.Fill;
         _grid.AutoGenerateColumns = false;
@@ -79,6 +86,7 @@ public sealed class BubbleMainForm : Form
         _stage = 0;
         _index = -1;
         _action.Visible = true;
+        _export.Enabled = false;
         _title.Text = "Paso 1 — Vuelos de llegada";
         _help.Text = "Abrí la lista de llegadas en Sabre. Marcá la tabla una vez y hacé scroll lentamente hasta el final.";
         _action.Text = "Iniciar lectura continua de llegadas";
@@ -178,6 +186,7 @@ public sealed class BubbleMainForm : Form
             _batch.Add(flight);
         }
 
+        _export.Enabled = _flights.Count > 0;
         _stage = nextStage;
         _index = 0;
         _status.Text = $"Lista terminada: {_batch.Count} vuelos únicos.";
@@ -244,6 +253,7 @@ public sealed class BubbleMainForm : Form
         _bubble?.Close();
         _bubble = null;
         _batch[_index].EspecialesLeidos = true;
+        _export.Enabled = _flights.Count > 0;
 
         if (++_index < _batch.Count)
         {
@@ -263,9 +273,44 @@ public sealed class BubbleMainForm : Form
         {
             _stage = 4;
             _title.Text = "Proceso completado";
-            _help.Text = "Revisá los resultados de llegadas y salidas.";
+            _help.Text = "Revisá los resultados de llegadas y salidas. Podés exportarlos al Excel operativo.";
             _action.Visible = false;
             _status.Text = "Lectura terminada.";
+        }
+    }
+
+    private void ExportExcel()
+    {
+        if (_flights.Count == 0)
+        {
+            MessageBox.Show("Todavía no hay vuelos para exportar.", "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Guardar Excel de AEP Control",
+            Filter = "Excel (*.xlsx)|*.xlsx",
+            DefaultExt = "xlsx",
+            AddExtension = true,
+            FileName = $"AEP-Control-{DateTime.Now:yyyy-MM-dd}.xlsx"
+        };
+
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+        try
+        {
+            ExcelExporter.Export(dialog.FileName, _flights.ToList());
+            _status.Text = $"Excel guardado: {Path.GetFileName(dialog.FileName)}";
+            MessageBox.Show(
+                "Excel generado correctamente. Los datos no disponibles quedaron vacíos.",
+                "AEP Control",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"No pude generar el Excel:\n\n{ex.Message}", "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
@@ -323,7 +368,6 @@ public sealed class BubbleMainForm : Form
 
                 if (finishRequested)
                 {
-                    // Pasadas finales para no perder el último documento visible al terminar el scroll.
                     for (var i = 0; i < 2; i++)
                     {
                         await Task.Delay(180);
