@@ -18,7 +18,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v0.9";
+        Text = "AEP Control v1.0";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1180, 700);
         TopMost = true;
@@ -178,6 +178,7 @@ public sealed class BubbleMainForm : Form
 
         var area = selector.SelectedArea;
         var reader = new ContinuousSpecialReader();
+        var recentTexts = new Queue<string>();
         _cts = new CancellationTokenSource();
         _bubble = new BubbleForm(f.Vuelo);
         _bubble.FinishRequested += (_, _) => FinishFlight();
@@ -189,11 +190,21 @@ public sealed class BubbleMainForm : Form
             {
                 using var bmp = new Bitmap(area.Width, area.Height);
                 using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(area.Location, Point.Empty, area.Size);
-                var text = await OcrService.ReadAsync(bmp);
-                var c = reader.AddOcrText(text);
-                f.WCHR = c.WCHR; f.WCHS = c.WCHS; f.WCHC = c.WCHC; f.AVIH = c.AVIH; f.INF = c.INF;
+
+                var text = await OcrService.ReadContinuousAsync(bmp);
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    recentTexts.Enqueue(text);
+                    while (recentTexts.Count > 5)
+                        recentTexts.Dequeue();
+
+                    var accumulatedText = string.Join(Environment.NewLine, recentTexts);
+                    var c = reader.AddOcrText(accumulatedText);
+                    f.WCHR = c.WCHR; f.WCHS = c.WCHS; f.WCHC = c.WCHC; f.AVIH = c.AVIH; f.INF = c.INF;
+                }
+
                 _bubble.UpdateCounts(f, reader.UniqueRows);
-                await Task.Delay(650, _cts.Token);
+                await Task.Delay(350, _cts.Token);
             }
         }
         catch (OperationCanceledException) { }
