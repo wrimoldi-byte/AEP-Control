@@ -18,7 +18,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v0.8";
+        Text = "AEP Control v0.9";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1180, 700);
         TopMost = true;
@@ -237,7 +237,7 @@ public sealed class BubbleMainForm : Form
 
     private async Task ReadPassengerDocumentsAsync()
     {
-        _status.Text = "Seleccioná en Sabre el área de documentación DOCS/OB y hacé scroll lentamente.";
+        _status.Text = "Seleccioná en Sabre el área de documentación DOCS/OB. La lectura seguirá activa mientras hagas scroll.";
         Hide();
         await Task.Delay(250);
         using var selector = new SelectionForm();
@@ -251,6 +251,8 @@ public sealed class BubbleMainForm : Form
 
         var area = selector.SelectedArea;
         var unique = new Dictionary<string, PassengerDocument>(StringComparer.OrdinalIgnoreCase);
+        var recentTexts = new Queue<string>();
+        var passes = 0;
         _cts = new CancellationTokenSource();
         _bubble = new BubbleForm("Documentación PAX", BubbleMode.PassengerDocuments);
         _bubble.FinishRequested += (_, _) => _cts.Cancel();
@@ -265,14 +267,24 @@ public sealed class BubbleMainForm : Form
                     g.CopyFromScreen(area.Location, Point.Empty, area.Size);
 
                 var text = await OcrService.ReadContinuousAsync(bmp);
-                foreach (var document in PassengerDocumentParser.Parse(text))
+                passes++;
+
+                if (!string.IsNullOrWhiteSpace(text))
                 {
-                    var key = $"{document.DocumentType}|{document.DocumentNumber}";
-                    unique[key] = document;
+                    recentTexts.Enqueue(text);
+                    while (recentTexts.Count > 3)
+                        recentTexts.Dequeue();
+
+                    var accumulatedText = string.Join(Environment.NewLine, recentTexts);
+                    foreach (var document in PassengerDocumentParser.Parse(accumulatedText))
+                    {
+                        var key = $"{document.DocumentType}|{document.DocumentNumber}";
+                        unique[key] = document;
+                    }
                 }
 
-                _bubble.UpdateDocumentCount(unique.Count);
-                await Task.Delay(900, _cts.Token);
+                _bubble.UpdateDocumentCount(unique.Count, passes);
+                await Task.Delay(450, _cts.Token);
             }
         }
         catch (OperationCanceledException) { }
@@ -294,7 +306,7 @@ public sealed class BubbleMainForm : Form
             .ToList();
         if (documents.Count == 0)
         {
-            _status.Text = "No detecté documentación. Ajustá la selección para incluir las líneas completas.";
+            _status.Text = $"No detecté documentación después de {passes} pasadas OCR. Ajustá la selección para incluir las líneas completas.";
             MessageBox.Show(
                 "No se encontró una línea con el formato esperado:\n\n" +
                 "I o P / país emisor / número / nacionalidad / nacimiento / sexo / vencimiento / apellido / nombres",
@@ -304,7 +316,7 @@ public sealed class BubbleMainForm : Form
             return;
         }
 
-        _status.Text = $"Documentación detectada: {documents.Count} PAX.";
+        _status.Text = $"Documentación detectada: {documents.Count} PAX en {passes} pasadas OCR.";
         using var results = new PassengerDocumentsForm(documents);
         results.ShowDialog(this);
     }
