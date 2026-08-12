@@ -18,12 +18,8 @@ public static class FlightParser
     public static List<FlightData> Parse(string text)
     {
         var normalized = Normalize(text);
-
-        // Windows OCR reads this Sabre grid by complete columns rather than by rows.
-        // Parse and zip those columns first; retain the previous row/window parser as fallback.
         var columnResult = ParseColumnTable(normalized);
         if (columnResult.Count > 0) return columnResult;
-
         return ParseRowWindows(normalized);
     }
 
@@ -34,39 +30,48 @@ public static class FlightParser
         var timeSection = ExtractSection(text, @"\bHORA\s+(?:LLEGADA|SALIDA)\b", @"\bETA\b");
         var bookingSection = ExtractSection(text, @"\bCANTIDAD\s+B\w*\b", @"\z");
 
-        if (flightSection is null || destinationSection is null || timeSection is null || bookingSection is null)
+        if (flightSection is null || timeSection is null)
             return new List<FlightData>();
 
         var flights = Regex.Matches(flightSection, @"\b\d{3,4}\b")
             .Select(m => m.Value).ToList();
-        var destinations = Regex.Matches(destinationSection, @"\b[A-Z]{3}\b")
-            .Select(m => m.Value)
-            .Where(value => !IgnoredThreeLetterWords.Contains(value))
-            .ToList();
         var times = Regex.Matches(timeSection, @"\b(?:[01]\d|2[0-3])[0-5]\d\b")
             .Select(m => FormatTime(m.Value)).ToList();
-        var bookings = BookingRegex.Matches(bookingSection)
-            .Select(m => (
-                Premium: int.Parse(m.Groups["premium"].Value),
-                Economy: int.Parse(m.Groups["economy"].Value)))
-            .ToList();
 
-        // Do not shift data between flights when OCR misses a value in any column.
-        if (flights.Count == 0 || destinations.Count != flights.Count ||
-            times.Count != flights.Count || bookings.Count != flights.Count)
+        if (flights.Count == 0 || times.Count == 0)
             return new List<FlightData>();
 
-        var result = new List<FlightData>(flights.Count);
-        for (var i = 0; i < flights.Count; i++)
+        var destinations = destinationSection is null
+            ? new List<string>()
+            : Regex.Matches(destinationSection, @"\b[A-Z]{3}\b")
+                .Select(m => m.Value)
+                .Where(value => !IgnoredThreeLetterWords.Contains(value))
+                .ToList();
+
+        var bookings = bookingSection is null
+            ? new List<(int Premium, int Economy)>()
+            : BookingRegex.Matches(bookingSection)
+                .Select(m => (
+                    Premium: int.Parse(m.Groups["premium"].Value),
+                    Economy: int.Parse(m.Groups["economy"].Value)))
+                .ToList();
+
+        var count = Math.Min(flights.Count, times.Count);
+        var result = new List<FlightData>(count);
+        var destinationsAligned = destinations.Count == flights.Count;
+        var bookingsAligned = bookings.Count == flights.Count;
+
+        for (var i = 0; i < count; i++)
         {
             result.Add(new FlightData
             {
                 Vuelo = $"LA{flights[i]}",
-                Destino = destinations[i],
+                Destino = destinationsAligned ? destinations[i] : string.Empty,
                 Hora = times[i],
                 Equipo = string.Empty,
-                Premium = bookings[i].Premium,
-                Economy = bookings[i].Economy
+                Premium = bookingsAligned ? bookings[i].Premium : 0,
+                Economy = bookingsAligned ? bookings[i].Economy : 0,
+                BookingKnown = bookingsAligned
             });
         }
 
@@ -106,25 +111,25 @@ public static class FlightParser
     private static FlightData? TryParseWindow(string window)
     {
         var flightMatch = FlightRegex.Match(window);
-        var bookingMatch = BookingRegex.Match(window);
-        if (!flightMatch.Success || !bookingMatch.Success) return null;
+        if (!flightMatch.Success) return null;
 
         var afterFlight = window[flightMatch.Index..];
         var timeMatch = TimeRegex.Match(afterFlight);
-        var equipmentMatch = EquipmentRegex.Match(afterFlight);
-        if (!timeMatch.Success || !equipmentMatch.Success) return null;
+        if (!timeMatch.Success) return null;
 
-        var destination = FindDestination(afterFlight, flightMatch.Length, timeMatch.Index);
-        if (destination is null) return null;
+        var equipmentMatch = EquipmentRegex.Match(afterFlight);
+        var bookingMatch = BookingRegex.Match(window);
+        var destination = FindDestination(afterFlight, flightMatch.Length, timeMatch.Index) ?? string.Empty;
 
         return new FlightData
         {
             Vuelo = $"LA{flightMatch.Groups["flight"].Value}",
             Destino = destination,
             Hora = FormatTime(timeMatch.Groups["time"].Value),
-            Equipo = equipmentMatch.Groups["equip"].Value,
-            Premium = int.Parse(bookingMatch.Groups["premium"].Value),
-            Economy = int.Parse(bookingMatch.Groups["economy"].Value)
+            Equipo = equipmentMatch.Success ? equipmentMatch.Groups["equip"].Value : string.Empty,
+            Premium = bookingMatch.Success ? int.Parse(bookingMatch.Groups["premium"].Value) : 0,
+            Economy = bookingMatch.Success ? int.Parse(bookingMatch.Groups["economy"].Value) : 0,
+            BookingKnown = bookingMatch.Success
         };
     }
 
