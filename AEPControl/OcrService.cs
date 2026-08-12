@@ -95,12 +95,44 @@ public static class OcrService
         if (bitmap.Width < 20 || bitmap.Height < 20)
             return string.Empty;
 
-        using var enhanced = Enhance(bitmap, 2, 1.65f, false);
-        var engine = CreateEngines().FirstOrDefault().Engine;
-        if (engine is null)
+        var engines = CreateEngines().Take(2).ToList();
+        if (engines.Count == 0)
             throw new InvalidOperationException("Windows no tiene ningún idioma OCR instalado.");
 
-        return await RecognizeAsync(enhanced, engine);
+        var results = new List<(string Text, int Score)>();
+
+        // Primera pasada: imagen original. Evita perder texto fino o antialiasing de Sabre.
+        var originalText = await RecognizeAsync(bitmap, engines[0].Engine);
+        results.Add((originalText, Score(originalText)));
+
+        // Segunda pasada: ampliada y en gris/contraste moderado.
+        using (var enhanced = Enhance(bitmap, 2, 1.55f, false))
+        {
+            var enhancedText = await RecognizeAsync(enhanced, engines[0].Engine);
+            results.Add((enhancedText, Score(enhancedText)));
+        }
+
+        var best = results.OrderByDescending(r => r.Score).First();
+
+        // Si ambas lecturas fueron pobres, probamos alto contraste y, si existe,
+        // un segundo idioma OCR. Esto se ejecuta sólo como recuperación.
+        if (best.Score < 35)
+        {
+            using var highContrast = Enhance(bitmap, 3, 1.85f, true);
+            var highText = await RecognizeAsync(highContrast, engines[0].Engine);
+            results.Add((highText, Score(highText)));
+
+            if (engines.Count > 1)
+            {
+                var secondLanguageText = await RecognizeAsync(highContrast, engines[1].Engine);
+                results.Add((secondLanguageText, Score(secondLanguageText)));
+            }
+
+            best = results.OrderByDescending(r => r.Score).First();
+        }
+
+        LastRawText = best.Text ?? string.Empty;
+        return LastRawText;
     }
 
     private static IEnumerable<(string Language, OcrEngine Engine)> CreateEngines()
