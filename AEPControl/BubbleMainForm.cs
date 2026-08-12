@@ -18,7 +18,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v1.1";
+        Text = "AEP Control v1.2";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1180, 700);
         TopMost = true;
@@ -112,11 +112,8 @@ public sealed class BubbleMainForm : Form
         void ProcessText(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return;
-
             recentTexts.Enqueue(text);
-            while (recentTexts.Count > 5)
-                recentTexts.Dequeue();
-
+            while (recentTexts.Count > 5) recentTexts.Dequeue();
             var accumulatedText = string.Join(Environment.NewLine, recentTexts);
             foreach (var flight in FlightParser.Parse(accumulatedText))
             {
@@ -134,13 +131,11 @@ public sealed class BubbleMainForm : Form
                 using (var g = Graphics.FromImage(bmp))
                     g.CopyFromScreen(area.Location, Point.Empty, area.Size);
 
-                var text = await OcrService.ReadContinuousAsync(bmp);
-                ProcessText(text);
+                ProcessText(await OcrService.ReadContinuousAsync(bmp));
                 _bubble.UpdateFlightCount(unique.Count);
 
                 if (finishRequested)
                 {
-                    // Dos pasadas finales para asegurar el último renglón visible al terminar el scroll.
                     for (var i = 0; i < 2; i++)
                     {
                         await Task.Delay(180);
@@ -225,9 +220,7 @@ public sealed class BubbleMainForm : Form
                 if (!string.IsNullOrWhiteSpace(text))
                 {
                     recentTexts.Enqueue(text);
-                    while (recentTexts.Count > 5)
-                        recentTexts.Dequeue();
-
+                    while (recentTexts.Count > 5) recentTexts.Dequeue();
                     var accumulatedText = string.Join(Environment.NewLine, recentTexts);
                     var c = reader.AddOcrText(accumulatedText);
                     f.WCHR = c.WCHR; f.WCHS = c.WCHS; f.WCHC = c.WCHC; f.AVIH = c.AVIH; f.INF = c.INF;
@@ -294,10 +287,27 @@ public sealed class BubbleMainForm : Form
         var unique = new Dictionary<string, PassengerDocument>(StringComparer.OrdinalIgnoreCase);
         var recentTexts = new Queue<string>();
         var passes = 0;
+        var finishRequested = false;
         _cts = new CancellationTokenSource();
         _bubble = new BubbleForm("Documentación PAX", BubbleMode.PassengerDocuments);
-        _bubble.FinishRequested += (_, _) => _cts.Cancel();
+        _bubble.FinishRequested += (_, _) => finishRequested = true;
         _bubble.Show();
+
+        void ProcessDocumentText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return;
+
+            recentTexts.Enqueue(text);
+            while (recentTexts.Count > 5)
+                recentTexts.Dequeue();
+
+            var accumulatedText = string.Join(Environment.NewLine, recentTexts);
+            foreach (var document in PassengerDocumentParser.Parse(accumulatedText))
+            {
+                var key = $"{document.DocumentType}|{document.DocumentNumber}";
+                unique[key] = document;
+            }
+        }
 
         try
         {
@@ -307,25 +317,30 @@ public sealed class BubbleMainForm : Form
                 using (var g = Graphics.FromImage(bmp))
                     g.CopyFromScreen(area.Location, Point.Empty, area.Size);
 
-                var text = await OcrService.ReadContinuousAsync(bmp);
+                ProcessDocumentText(await OcrService.ReadContinuousAsync(bmp));
                 passes++;
+                _bubble.UpdateDocumentCount(unique.Count, passes);
 
-                if (!string.IsNullOrWhiteSpace(text))
+                if (finishRequested)
                 {
-                    recentTexts.Enqueue(text);
-                    while (recentTexts.Count > 3)
-                        recentTexts.Dequeue();
-
-                    var accumulatedText = string.Join(Environment.NewLine, recentTexts);
-                    foreach (var document in PassengerDocumentParser.Parse(accumulatedText))
+                    // Pasadas finales para no perder el último documento visible al terminar el scroll.
+                    for (var i = 0; i < 2; i++)
                     {
-                        var key = $"{document.DocumentType}|{document.DocumentNumber}";
-                        unique[key] = document;
+                        await Task.Delay(180);
+                        using var finalBmp = new Bitmap(area.Width, area.Height);
+                        using (var g = Graphics.FromImage(finalBmp))
+                            g.CopyFromScreen(area.Location, Point.Empty, area.Size);
+
+                        ProcessDocumentText(await OcrService.ReadContinuousAsync(finalBmp));
+                        passes++;
+                        _bubble.UpdateDocumentCount(unique.Count, passes);
                     }
+
+                    _cts.Cancel();
+                    break;
                 }
 
-                _bubble.UpdateDocumentCount(unique.Count, passes);
-                await Task.Delay(450, _cts.Token);
+                await Task.Delay(350, _cts.Token);
             }
         }
         catch (OperationCanceledException) { }
