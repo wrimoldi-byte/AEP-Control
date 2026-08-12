@@ -18,7 +18,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v1.0";
+        Text = "AEP Control v1.1";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1180, 700);
         TopMost = true;
@@ -102,10 +102,29 @@ public sealed class BubbleMainForm : Form
 
         var area = selector.SelectedArea;
         var unique = new Dictionary<string, FlightData>(StringComparer.OrdinalIgnoreCase);
+        var recentTexts = new Queue<string>();
+        var finishRequested = false;
         _cts = new CancellationTokenSource();
         _bubble = new BubbleForm($"Vuelos de {movement.ToLowerInvariant()}", BubbleMode.FlightList);
-        _bubble.FinishRequested += (_, _) => _cts.Cancel();
+        _bubble.FinishRequested += (_, _) => finishRequested = true;
         _bubble.Show();
+
+        void ProcessText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return;
+
+            recentTexts.Enqueue(text);
+            while (recentTexts.Count > 5)
+                recentTexts.Dequeue();
+
+            var accumulatedText = string.Join(Environment.NewLine, recentTexts);
+            foreach (var flight in FlightParser.Parse(accumulatedText))
+            {
+                flight.Movimiento = movement;
+                var key = $"{flight.Vuelo}|{flight.Hora}";
+                unique[key] = flight;
+            }
+        }
 
         try
         {
@@ -116,15 +135,26 @@ public sealed class BubbleMainForm : Form
                     g.CopyFromScreen(area.Location, Point.Empty, area.Size);
 
                 var text = await OcrService.ReadContinuousAsync(bmp);
-                foreach (var flight in FlightParser.Parse(text))
+                ProcessText(text);
+                _bubble.UpdateFlightCount(unique.Count);
+
+                if (finishRequested)
                 {
-                    flight.Movimiento = movement;
-                    var key = $"{flight.Vuelo}|{flight.Hora}";
-                    unique[key] = flight;
+                    // Dos pasadas finales para asegurar el último renglón visible al terminar el scroll.
+                    for (var i = 0; i < 2; i++)
+                    {
+                        await Task.Delay(180);
+                        using var finalBmp = new Bitmap(area.Width, area.Height);
+                        using (var g = Graphics.FromImage(finalBmp))
+                            g.CopyFromScreen(area.Location, Point.Empty, area.Size);
+                        ProcessText(await OcrService.ReadContinuousAsync(finalBmp));
+                        _bubble.UpdateFlightCount(unique.Count);
+                    }
+                    _cts.Cancel();
+                    break;
                 }
 
-                _bubble.UpdateFlightCount(unique.Count);
-                await Task.Delay(900, _cts.Token);
+                await Task.Delay(350, _cts.Token);
             }
         }
         catch (OperationCanceledException) { }
