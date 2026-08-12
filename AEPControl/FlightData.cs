@@ -9,8 +9,9 @@ public sealed class FlightData
     public string Equipo { get; set; } = "";
     public int Premium { get; set; }
     public int Economy { get; set; }
+    public bool BookingKnown { get; set; }
     public int Total => Premium + Economy;
-    public string Booking => $"{Premium:000}/{Economy:000}";
+    public string Booking => BookingKnown ? $"{Premium:000}/{Economy:000}" : string.Empty;
 
     public int WCHR { get; set; }
     public int WCHS { get; set; }
