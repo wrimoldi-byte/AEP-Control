@@ -19,7 +19,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v1.7";
+        Text = "AEP Control v1.9";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1180, 700);
         TopMost = true;
@@ -88,7 +88,7 @@ public sealed class BubbleMainForm : Form
         _action.Visible = true;
         _export.Enabled = false;
         _title.Text = "Paso 1 — Vuelos de llegada";
-        _help.Text = "Abrí la lista de llegadas en Sabre. Marcá la tabla una vez. La app leerá cada pantalla por separado mientras hacés scroll.";
+        _help.Text = "Marcá SOLO la grilla de Sabre: desde los encabezados No/Aerolínea/Vuelo hasta la última fila visible. La app leerá Vuelo, Origen, Hora y Booking por columnas mientras hacés scroll.";
         _action.Text = "Iniciar lectura de llegadas";
         _status.Text = "Esperando lectura.";
         Show();
@@ -136,10 +136,10 @@ public sealed class BubbleMainForm : Form
             }
         }
 
-        void ProcessScreen(string text)
+        async Task ProcessScreenAsync(Bitmap bmp)
         {
-            if (string.IsNullOrWhiteSpace(text)) return;
-            foreach (var flight in FlightParser.Parse(text)) MergeFlight(flight);
+            foreach (var flight in await FlightColumnReader.ReadAsync(bmp))
+                MergeFlight(flight);
         }
 
         try
@@ -149,7 +149,7 @@ public sealed class BubbleMainForm : Form
                 using var bmp = new Bitmap(area.Width, area.Height);
                 using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(area.Location, Point.Empty, area.Size);
 
-                ProcessScreen(await OcrService.ReadContinuousAsync(bmp));
+                await ProcessScreenAsync(bmp);
                 _bubble.UpdateFlightCount(unique.Count);
 
                 if (finishRequested)
@@ -159,7 +159,7 @@ public sealed class BubbleMainForm : Form
                         await Task.Delay(250);
                         using var finalBmp = new Bitmap(area.Width, area.Height);
                         using (var g = Graphics.FromImage(finalBmp)) g.CopyFromScreen(area.Location, Point.Empty, area.Size);
-                        ProcessScreen(await OcrService.ReadContinuousAsync(finalBmp));
+                        await ProcessScreenAsync(finalBmp);
                         _bubble.UpdateFlightCount(unique.Count);
                     }
                     _cts.Cancel();
@@ -184,7 +184,7 @@ public sealed class BubbleMainForm : Form
 
         if (unique.Count == 0)
         {
-            _status.Text = "No detecté vuelos. Seleccioná toda la tabla visible incluyendo encabezados.";
+            _status.Text = "No detecté vuelos. Marcá sólo la grilla, desde los encabezados hasta la última fila visible.";
             return;
         }
 
