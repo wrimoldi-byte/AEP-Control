@@ -19,7 +19,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v1.3";
+        Text = "AEP Control v1.7";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1180, 700);
         TopMost = true;
@@ -88,8 +88,8 @@ public sealed class BubbleMainForm : Form
         _action.Visible = true;
         _export.Enabled = false;
         _title.Text = "Paso 1 — Vuelos de llegada";
-        _help.Text = "Abrí la lista de llegadas en Sabre. Marcá la tabla una vez y hacé scroll lentamente hasta el final.";
-        _action.Text = "Iniciar lectura continua de llegadas";
+        _help.Text = "Abrí la lista de llegadas en Sabre. Marcá la tabla una vez. La app leerá cada pantalla por separado mientras hacés scroll.";
+        _action.Text = "Iniciar lectura de llegadas";
         _status.Text = "Esperando lectura.";
         Show();
     }
@@ -110,25 +110,36 @@ public sealed class BubbleMainForm : Form
 
         var area = selector.SelectedArea;
         var unique = new Dictionary<string, FlightData>(StringComparer.OrdinalIgnoreCase);
-        var recentTexts = new Queue<string>();
         var finishRequested = false;
         _cts = new CancellationTokenSource();
         _bubble = new BubbleForm($"Vuelos de {movement.ToLowerInvariant()}", BubbleMode.FlightList);
         _bubble.FinishRequested += (_, _) => finishRequested = true;
         _bubble.Show();
 
-        void ProcessText(string text)
+        void MergeFlight(FlightData incoming)
+        {
+            incoming.Movimiento = movement;
+            if (!unique.TryGetValue(incoming.Vuelo, out var existing))
+            {
+                unique[incoming.Vuelo] = incoming;
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(existing.Destino) && !string.IsNullOrWhiteSpace(incoming.Destino)) existing.Destino = incoming.Destino;
+            if (string.IsNullOrWhiteSpace(existing.Hora) && !string.IsNullOrWhiteSpace(incoming.Hora)) existing.Hora = incoming.Hora;
+            if (string.IsNullOrWhiteSpace(existing.Equipo) && !string.IsNullOrWhiteSpace(incoming.Equipo)) existing.Equipo = incoming.Equipo;
+            if (!existing.BookingKnown && incoming.BookingKnown)
+            {
+                existing.Premium = incoming.Premium;
+                existing.Economy = incoming.Economy;
+                existing.BookingKnown = true;
+            }
+        }
+
+        void ProcessScreen(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return;
-            recentTexts.Enqueue(text);
-            while (recentTexts.Count > 5) recentTexts.Dequeue();
-            var accumulatedText = string.Join(Environment.NewLine, recentTexts);
-            foreach (var flight in FlightParser.Parse(accumulatedText))
-            {
-                flight.Movimiento = movement;
-                var key = $"{flight.Vuelo}|{flight.Hora}";
-                unique[key] = flight;
-            }
+            foreach (var flight in FlightParser.Parse(text)) MergeFlight(flight);
         }
 
         try
@@ -136,28 +147,26 @@ public sealed class BubbleMainForm : Form
             while (!_cts.IsCancellationRequested)
             {
                 using var bmp = new Bitmap(area.Width, area.Height);
-                using (var g = Graphics.FromImage(bmp))
-                    g.CopyFromScreen(area.Location, Point.Empty, area.Size);
+                using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(area.Location, Point.Empty, area.Size);
 
-                ProcessText(await OcrService.ReadContinuousAsync(bmp));
+                ProcessScreen(await OcrService.ReadContinuousAsync(bmp));
                 _bubble.UpdateFlightCount(unique.Count);
 
                 if (finishRequested)
                 {
-                    for (var i = 0; i < 2; i++)
+                    for (var i = 0; i < 3; i++)
                     {
-                        await Task.Delay(180);
+                        await Task.Delay(250);
                         using var finalBmp = new Bitmap(area.Width, area.Height);
-                        using (var g = Graphics.FromImage(finalBmp))
-                            g.CopyFromScreen(area.Location, Point.Empty, area.Size);
-                        ProcessText(await OcrService.ReadContinuousAsync(finalBmp));
+                        using (var g = Graphics.FromImage(finalBmp)) g.CopyFromScreen(area.Location, Point.Empty, area.Size);
+                        ProcessScreen(await OcrService.ReadContinuousAsync(finalBmp));
                         _bubble.UpdateFlightCount(unique.Count);
                     }
                     _cts.Cancel();
                     break;
                 }
 
-                await Task.Delay(350, _cts.Token);
+                await Task.Delay(900, _cts.Token);
             }
         }
         catch (OperationCanceledException) { }
@@ -175,7 +184,7 @@ public sealed class BubbleMainForm : Form
 
         if (unique.Count == 0)
         {
-            _status.Text = "No detecté vuelos. Seleccioná una zona más ajustada.";
+            _status.Text = "No detecté vuelos. Seleccioná toda la tabla visible incluyendo encabezados.";
             return;
         }
 
@@ -212,7 +221,6 @@ public sealed class BubbleMainForm : Form
 
         var area = selector.SelectedArea;
         var reader = new ContinuousSpecialReader();
-        var recentTexts = new Queue<string>();
         _cts = new CancellationTokenSource();
         _bubble = new BubbleForm(f.Vuelo);
         _bubble.FinishRequested += (_, _) => FinishFlight();
@@ -228,15 +236,12 @@ public sealed class BubbleMainForm : Form
                 var text = await OcrService.ReadContinuousAsync(bmp);
                 if (!string.IsNullOrWhiteSpace(text))
                 {
-                    recentTexts.Enqueue(text);
-                    while (recentTexts.Count > 5) recentTexts.Dequeue();
-                    var accumulatedText = string.Join(Environment.NewLine, recentTexts);
-                    var c = reader.AddOcrText(accumulatedText);
+                    var c = reader.AddOcrText(text);
                     f.WCHR = c.WCHR; f.WCHS = c.WCHS; f.WCHC = c.WCHC; f.AVIH = c.AVIH; f.INF = c.INF;
                 }
 
                 _bubble.UpdateCounts(f, reader.UniqueRows);
-                await Task.Delay(350, _cts.Token);
+                await Task.Delay(900, _cts.Token);
             }
         }
         catch (OperationCanceledException) { }
@@ -302,11 +307,7 @@ public sealed class BubbleMainForm : Form
         {
             ExcelExporter.Export(dialog.FileName, _flights.ToList());
             _status.Text = $"Excel guardado: {Path.GetFileName(dialog.FileName)}";
-            MessageBox.Show(
-                "Excel generado correctamente. Los datos no disponibles quedaron vacíos.",
-                "AEP Control",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            MessageBox.Show("Excel generado correctamente. Los datos no disponibles quedaron vacíos.", "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
@@ -316,21 +317,17 @@ public sealed class BubbleMainForm : Form
 
     private async Task ReadPassengerDocumentsAsync()
     {
-        _status.Text = "Seleccioná en Sabre el área de documentación DOCS/OB. La lectura seguirá activa mientras hagas scroll.";
+        _status.Text = "Seleccioná el área de documentación DOCS/OB. Cada pantalla se leerá por separado mientras hacés scroll.";
         Hide();
         await Task.Delay(250);
         using var selector = new SelectionForm();
         if (selector.ShowDialog() != DialogResult.OK)
         {
-            Show();
-            Activate();
-            _status.Text = "Lectura de documentación cancelada.";
-            return;
+            Show(); Activate(); _status.Text = "Lectura de documentación cancelada."; return;
         }
 
         var area = selector.SelectedArea;
         var unique = new Dictionary<string, PassengerDocument>(StringComparer.OrdinalIgnoreCase);
-        var recentTexts = new Queue<string>();
         var passes = 0;
         var finishRequested = false;
         _cts = new CancellationTokenSource();
@@ -338,16 +335,10 @@ public sealed class BubbleMainForm : Form
         _bubble.FinishRequested += (_, _) => finishRequested = true;
         _bubble.Show();
 
-        void ProcessDocumentText(string text)
+        void ProcessScreen(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return;
-
-            recentTexts.Enqueue(text);
-            while (recentTexts.Count > 5)
-                recentTexts.Dequeue();
-
-            var accumulatedText = string.Join(Environment.NewLine, recentTexts);
-            foreach (var document in PassengerDocumentParser.Parse(accumulatedText))
+            foreach (var document in PassengerDocumentParser.Parse(text))
             {
                 var key = $"{document.DocumentType}|{document.DocumentNumber}";
                 unique[key] = document;
@@ -359,32 +350,28 @@ public sealed class BubbleMainForm : Form
             while (!_cts.IsCancellationRequested)
             {
                 using var bmp = new Bitmap(area.Width, area.Height);
-                using (var g = Graphics.FromImage(bmp))
-                    g.CopyFromScreen(area.Location, Point.Empty, area.Size);
+                using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(area.Location, Point.Empty, area.Size);
 
-                ProcessDocumentText(await OcrService.ReadContinuousAsync(bmp));
+                ProcessScreen(await OcrService.ReadContinuousAsync(bmp));
                 passes++;
                 _bubble.UpdateDocumentCount(unique.Count, passes);
 
                 if (finishRequested)
                 {
-                    for (var i = 0; i < 2; i++)
+                    for (var i = 0; i < 3; i++)
                     {
-                        await Task.Delay(180);
+                        await Task.Delay(250);
                         using var finalBmp = new Bitmap(area.Width, area.Height);
-                        using (var g = Graphics.FromImage(finalBmp))
-                            g.CopyFromScreen(area.Location, Point.Empty, area.Size);
-
-                        ProcessDocumentText(await OcrService.ReadContinuousAsync(finalBmp));
+                        using (var g = Graphics.FromImage(finalBmp)) g.CopyFromScreen(area.Location, Point.Empty, area.Size);
+                        ProcessScreen(await OcrService.ReadContinuousAsync(finalBmp));
                         passes++;
                         _bubble.UpdateDocumentCount(unique.Count, passes);
                     }
-
                     _cts.Cancel();
                     break;
                 }
 
-                await Task.Delay(350, _cts.Token);
+                await Task.Delay(900, _cts.Token);
             }
         }
         catch (OperationCanceledException) { }
@@ -394,25 +381,14 @@ public sealed class BubbleMainForm : Form
         }
         finally
         {
-            _bubble?.Close();
-            _bubble = null;
-            Show();
-            Activate();
+            _bubble?.Close(); _bubble = null; Show(); Activate();
         }
 
-        var documents = unique.Values
-            .OrderBy(document => document.Surname)
-            .ThenBy(document => document.GivenNames)
-            .ToList();
+        var documents = unique.Values.OrderBy(d => d.Surname).ThenBy(d => d.GivenNames).ToList();
         if (documents.Count == 0)
         {
-            _status.Text = $"No detecté documentación después de {passes} pasadas OCR. Ajustá la selección para incluir las líneas completas.";
-            MessageBox.Show(
-                "No se encontró una línea con el formato esperado:\n\n" +
-                "I o P / país emisor / número / nacionalidad / nacimiento / sexo / vencimiento / apellido / nombres",
-                "Documentación de PAX",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            _status.Text = $"No detecté documentación después de {passes} pasadas OCR.";
+            MessageBox.Show("No se encontró documentación con el formato esperado. Probá seleccionando las líneas completas.", "Documentación de PAX", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
