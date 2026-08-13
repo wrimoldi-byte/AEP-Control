@@ -7,7 +7,7 @@ public static class FlightColumnReader
 {
     private static readonly Regex FlightRegex = new(@"\b(?<flight>\d{3,4})\b", RegexOptions.Compiled);
     private static readonly Regex OriginRegex = new(@"\b(?<origin>[A-Z]{3})\b", RegexOptions.Compiled);
-    private static readonly Regex TimeRegex = new(@"\b(?<time>(?:[01]\d|2[0-3])[0-5]\d)\b", RegexOptions.Compiled);
+    private static readonly Regex RawTimeRegex = new(@"\b(?<time>\d{4})\b", RegexOptions.Compiled);
     private static readonly Regex BookingRegex = new(@"\b(?<premium>\d{1,3})\s*[/\\|]\s*(?<economy>\d{1,3})\*?\b", RegexOptions.Compiled);
     private static bool _diagnosticSaved;
 
@@ -92,8 +92,10 @@ public static class FlightColumnReader
             .Where(IsPlausibleAirport)
             .ToList();
 
-        var times = TimeRegex.Matches(Normalize(timeText))
-            .Select(m => FormatTime(m.Groups["time"].Value))
+        var times = RawTimeRegex.Matches(Normalize(timeText))
+            .Select(m => NormalizeTime(m.Groups["time"].Value))
+            .Where(value => value is not null)
+            .Cast<string>()
             .ToList();
 
         var bookings = BookingRegex.Matches(Normalize(bookingText))
@@ -102,24 +104,35 @@ public static class FlightColumnReader
                 Economy: int.Parse(m.Groups["economy"].Value)))
             .ToList();
 
-        if (flights.Count == 0 || flights.Count != times.Count)
+        // Vuelo es la columna ancla. Ya no descartamos toda la pantalla por una sola
+        // lectura dudosa de hora u origen. Las columnas faltantes quedan vacías.
+        if (flights.Count == 0)
             return new List<FlightData>();
 
-        var originsAligned = origins.Count == flights.Count;
-        var bookingsAligned = bookings.Count == flights.Count;
         var result = new List<FlightData>(flights.Count);
+        var originOffset = origins.Count <= flights.Count ? flights.Count - origins.Count : 0;
+        var timeOffset = times.Count <= flights.Count ? flights.Count - times.Count : 0;
+        var bookingOffset = bookings.Count <= flights.Count ? flights.Count - bookings.Count : 0;
 
         for (var i = 0; i < flights.Count; i++)
         {
+            var originIndex = i - originOffset;
+            var timeIndex = i - timeOffset;
+            var bookingIndex = i - bookingOffset;
+
+            var hasOrigin = originIndex >= 0 && originIndex < origins.Count;
+            var hasTime = timeIndex >= 0 && timeIndex < times.Count;
+            var hasBooking = bookingIndex >= 0 && bookingIndex < bookings.Count;
+
             result.Add(new FlightData
             {
                 Vuelo = $"LA{flights[i]}",
-                Destino = originsAligned ? origins[i] : string.Empty,
-                Hora = times[i],
+                Destino = hasOrigin ? origins[originIndex] : string.Empty,
+                Hora = hasTime ? times[timeIndex] : string.Empty,
                 Equipo = string.Empty,
-                Premium = bookingsAligned ? bookings[i].Premium : 0,
-                Economy = bookingsAligned ? bookings[i].Economy : 0,
-                BookingKnown = bookingsAligned
+                Premium = hasBooking ? bookings[bookingIndex].Premium : 0,
+                Economy = hasBooking ? bookings[bookingIndex].Economy : 0,
+                BookingKnown = hasBooking
             });
         }
 
@@ -153,5 +166,22 @@ public static class FlightColumnReader
         return value;
     }
 
-    private static string FormatTime(string raw) => raw.Insert(2, ":");
+    private static string? NormalizeTime(string raw)
+    {
+        if (raw.Length != 4 || !raw.All(char.IsDigit)) return null;
+
+        var hour = int.Parse(raw[..2]);
+        var minute = int.Parse(raw[2..]);
+        if (minute > 59) return null;
+
+        if (hour <= 23)
+            return raw.Insert(2, ":");
+
+        // Error observado en Sabre/Windows OCR: 0740 puede llegar como 3740.
+        // Si la hora es imposible y reemplazar sólo el primer dígito por 0 la vuelve
+        // válida, recuperamos ese valor en vez de descartar toda la pantalla.
+        var repaired = "0" + raw[1..];
+        var repairedHour = int.Parse(repaired[..2]);
+        return repairedHour <= 23 ? repaired.Insert(2, ":") : null;
+    }
 }
