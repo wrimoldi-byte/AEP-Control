@@ -18,12 +18,15 @@ public static class OcrService
         if (bitmap.Width < 20 || bitmap.Height < 20)
             throw new InvalidOperationException("La zona seleccionada es demasiado pequeña para leerla.");
 
-        var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "AEPControl-Diagnostico");
+        var folder = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            "AEPControl-Diagnostico");
         Directory.CreateDirectory(folder);
         LastDiagnosticFolder = folder;
 
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
-        bitmap.Save(Path.Combine(folder, $"captura-{stamp}.png"), ImageFormat.Png);
+        var capturePath = Path.Combine(folder, $"captura-{stamp}.png");
+        bitmap.Save(capturePath, ImageFormat.Png);
 
         var candidates = new List<(string Name, Bitmap Image, bool Dispose)>
         {
@@ -56,7 +59,8 @@ public static class OcrService
         }
         finally
         {
-            foreach (var candidate in candidates.Where(c => c.Dispose)) candidate.Image.Dispose();
+            foreach (var candidate in candidates.Where(c => c.Dispose))
+                candidate.Image.Dispose();
         }
 
         var best = results.OrderByDescending(r => r.Score).FirstOrDefault();
@@ -78,49 +82,27 @@ public static class OcrService
         File.WriteAllLines(Path.Combine(folder, $"ocr-{stamp}.txt"), report);
 
         if (string.IsNullOrWhiteSpace(LastRawText))
-            throw new InvalidOperationException("El OCR no pudo leer ningún texto. Se guardó un diagnóstico en:\n\n" + folder);
+        {
+            throw new InvalidOperationException(
+                "El OCR no pudo leer ningún texto. Se guardaron la captura, las imágenes mejoradas y el informe en:\n\n" + folder);
+        }
 
         return LastRawText;
     }
 
     public static async Task<string> ReadContinuousAsync(Bitmap bitmap)
     {
-        if (bitmap.Width < 20 || bitmap.Height < 20) return string.Empty;
+        if (bitmap.Width < 20 || bitmap.Height < 20)
+            return string.Empty;
 
-        var engines = CreateEngines().ToList();
-        if (engines.Count == 0)
+        using var enhanced = Enhance(bitmap, 2, 1.65f, false);
+        var engine = CreateEngines().FirstOrDefault().Engine;
+        if (engine is null)
             throw new InvalidOperationException("Windows no tiene ningún idioma OCR instalado.");
 
-        using var gray = Enhance(bitmap, 2, 1.65f, false);
-        using var high = Enhance(bitmap, 3, 2.05f, true);
-        var candidates = new[] { bitmap, gray, high };
-        var results = new List<(string Text, int Score)>();
-
-        foreach (var candidate in candidates)
-        {
-            foreach (var engine in engines)
-            {
-                try
-                {
-                    var text = await RecognizeAsync(candidate, engine.Engine);
-                    results.Add((text, Score(text)));
-                }
-                catch
-                {
-                    // En lectura continua una variante fallida no debe detener todo el proceso.
-                }
-            }
-        }
-
-        if (results.Count == 0)
-        {
-            LastRawText = string.Empty;
-            return string.Empty;
-        }
-
-        var best = results.OrderByDescending(r => r.Score).First();
-        LastRawText = best.Text ?? string.Empty;
-        return LastRawText;
+        var text = await RecognizeAsync(enhanced, engine);
+        LastRawText = text;
+        return text;
     }
 
     private static IEnumerable<(string Language, OcrEngine Engine)> CreateEngines()
@@ -129,7 +111,8 @@ public static class OcrService
 
         foreach (var tag in new[] { "en-US", "es-AR", "es-ES" })
         {
-            var language = OcrEngine.AvailableRecognizerLanguages.FirstOrDefault(l => l.LanguageTag.Equals(tag, StringComparison.OrdinalIgnoreCase));
+            var language = OcrEngine.AvailableRecognizerLanguages
+                .FirstOrDefault(l => l.LanguageTag.Equals(tag, StringComparison.OrdinalIgnoreCase));
             if (language is null || !created.Add(language.LanguageTag)) continue;
             var engine = OcrEngine.TryCreateFromLanguage(language);
             if (engine is not null) yield return (language.LanguageTag, engine);
@@ -162,7 +145,9 @@ public static class OcrService
         randomStream.Seek(0);
 
         var decoder = await BitmapDecoder.CreateAsync(randomStream);
-        using var softwareBitmap = await decoder.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
+        using var softwareBitmap = await decoder.GetSoftwareBitmapAsync(
+            BitmapPixelFormat.Bgra8,
+            BitmapAlphaMode.Premultiplied);
         var result = await engine.RecognizeAsync(softwareBitmap);
         return result.Text?.Trim() ?? string.Empty;
     }
@@ -191,10 +176,16 @@ public static class OcrService
 
             using var attributes = new ImageAttributes();
             attributes.SetColorMatrix(matrix);
-            graphics.DrawImage(source, new Rectangle(0, 0, target.Width, target.Height), 0, 0, source.Width, source.Height, GraphicsUnit.Pixel, attributes);
+            graphics.DrawImage(source,
+                new Rectangle(0, 0, target.Width, target.Height),
+                0, 0, source.Width, source.Height,
+                GraphicsUnit.Pixel,
+                attributes);
         }
 
-        if (threshold) ApplyThreshold(target, 185);
+        if (threshold)
+            ApplyThreshold(target, 185);
+
         return target;
     }
 
@@ -214,7 +205,10 @@ public static class OcrService
         if (string.IsNullOrWhiteSpace(text)) return 0;
         var lettersAndDigits = text.Count(char.IsLetterOrDigit);
         var separators = text.Count(c => c is '/' or '\\' or ':' or '*');
-        var likelyFlights = System.Text.RegularExpressions.Regex.Matches(text, @"\b(?:LA\s*)?\d{3,4}\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
+        var likelyFlights = System.Text.RegularExpressions.Regex.Matches(
+            text,
+            @"\b(?:LA\s*)?\d{3,4}\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
         return lettersAndDigits + separators * 6 + likelyFlights * 40;
     }
 }
