@@ -10,6 +10,8 @@ public static class FlightColumnReader
     private static readonly Regex RawTimeRegex = new(@"\b(?<time>\d{4})\b", RegexOptions.Compiled);
     private static readonly Regex BookingRegex = new(@"\b(?<premium>\d{1,3})\s*[/\\|]\s*(?<economy>\d{1,3})\*?\b", RegexOptions.Compiled);
     private static bool _diagnosticSaved;
+    private static HashSet<string> _previousSignatures = new(StringComparer.OrdinalIgnoreCase);
+    private static DateTime _lastReadUtc = DateTime.MinValue;
 
     private const double FlightLeft = 0.186;
     private const double FlightRight = 0.282;
@@ -24,6 +26,10 @@ public static class FlightColumnReader
     {
         if (grid.Width < 400 || grid.Height < 100)
             return new List<FlightData>();
+
+        if ((DateTime.UtcNow - _lastReadUtc).TotalSeconds > 8)
+            _previousSignatures.Clear();
+        _lastReadUtc = DateTime.UtcNow;
 
         if (!_diagnosticSaved)
         {
@@ -41,7 +47,8 @@ public static class FlightColumnReader
         var timeText = await OcrService.ReadContinuousAsync(timeColumn);
         var bookingText = await OcrService.ReadContinuousAsync(bookingColumn);
 
-        return ParseColumns(flightText, originText, timeText, bookingText);
+        var parsed = ParseColumns(flightText, originText, timeText, bookingText);
+        return ConfirmStableRows(parsed);
     }
 
     public static async Task<string> SaveDiagnosticAsync(Bitmap grid)
@@ -104,40 +111,48 @@ public static class FlightColumnReader
                 Economy: int.Parse(m.Groups["economy"].Value)))
             .ToList();
 
-        // Vuelo es la columna ancla. Ya no descartamos toda la pantalla por una sola
-        // lectura dudosa de hora u origen. Las columnas faltantes quedan vacías.
-        if (flights.Count == 0)
+        // Para evitar que durante el scroll se mezclen columnas de filas distintas,
+        // sólo aceptamos capturas donde las tres columnas operativas estén alineadas.
+        if (flights.Count == 0 || times.Count != flights.Count || bookings.Count != flights.Count)
             return new List<FlightData>();
 
+        var originsAligned = origins.Count == flights.Count;
         var result = new List<FlightData>(flights.Count);
-        var originOffset = origins.Count <= flights.Count ? flights.Count - origins.Count : 0;
-        var timeOffset = times.Count <= flights.Count ? flights.Count - times.Count : 0;
-        var bookingOffset = bookings.Count <= flights.Count ? flights.Count - bookings.Count : 0;
 
         for (var i = 0; i < flights.Count; i++)
         {
-            var originIndex = i - originOffset;
-            var timeIndex = i - timeOffset;
-            var bookingIndex = i - bookingOffset;
-
-            var hasOrigin = originIndex >= 0 && originIndex < origins.Count;
-            var hasTime = timeIndex >= 0 && timeIndex < times.Count;
-            var hasBooking = bookingIndex >= 0 && bookingIndex < bookings.Count;
-
             result.Add(new FlightData
             {
                 Vuelo = $"LA{flights[i]}",
-                Destino = hasOrigin ? origins[originIndex] : string.Empty,
-                Hora = hasTime ? times[timeIndex] : string.Empty,
+                Destino = originsAligned ? origins[i] : string.Empty,
+                Hora = times[i],
                 Equipo = string.Empty,
-                Premium = hasBooking ? bookings[bookingIndex].Premium : 0,
-                Economy = hasBooking ? bookings[bookingIndex].Economy : 0,
-                BookingKnown = hasBooking
+                Premium = bookings[i].Premium,
+                Economy = bookings[i].Economy,
+                BookingKnown = true
             });
         }
 
         return result;
     }
+
+    private static List<FlightData> ConfirmStableRows(List<FlightData> parsed)
+    {
+        var current = parsed
+            .Where(f => f.BookingKnown && !string.IsNullOrWhiteSpace(f.Hora))
+            .ToDictionary(Signature, f => f, StringComparer.OrdinalIgnoreCase);
+
+        var confirmed = current
+            .Where(kvp => _previousSignatures.Contains(kvp.Key))
+            .Select(kvp => kvp.Value)
+            .ToList();
+
+        _previousSignatures = current.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return confirmed;
+    }
+
+    private static string Signature(FlightData flight) =>
+        $"{flight.Vuelo}|{flight.Hora}|{flight.Premium:000}/{flight.Economy:000}";
 
     private static Bitmap Crop(Bitmap source, double leftRatio, double rightRatio)
     {
@@ -178,8 +193,6 @@ public static class FlightColumnReader
             return raw.Insert(2, ":");
 
         // Error observado en Sabre/Windows OCR: 0740 puede llegar como 3740.
-        // Si la hora es imposible y reemplazar sólo el primer dígito por 0 la vuelve
-        // válida, recuperamos ese valor en vez de descartar toda la pantalla.
         var repaired = "0" + raw[1..];
         var repairedHour = int.Parse(repaired[..2]);
         return repairedHour <= 23 ? repaired.Insert(2, ":") : null;
