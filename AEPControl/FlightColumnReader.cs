@@ -9,9 +9,8 @@ public static class FlightColumnReader
     private static readonly Regex OriginRegex = new(@"\b(?<origin>[A-Z]{3})\b", RegexOptions.Compiled);
     private static readonly Regex TimeRegex = new(@"\b(?<time>(?:[01]\d|2[0-3])[0-5]\d)\b", RegexOptions.Compiled);
     private static readonly Regex BookingRegex = new(@"\b(?<premium>\d{1,3})\s*[/\\|]\s*(?<economy>\d{1,3})\*?\b", RegexOptions.Compiled);
+    private static bool _diagnosticSaved;
 
-    // Proporciones medidas directamente sobre la grilla Sabre mostrada por el usuario.
-    // Se mantienen márgenes internos para no invadir las columnas vecinas (especialmente ETA).
     private const double FlightLeft = 0.186;
     private const double FlightRight = 0.282;
     private const double OriginLeft = 0.369;
@@ -25,6 +24,12 @@ public static class FlightColumnReader
     {
         if (grid.Width < 400 || grid.Height < 100)
             return new List<FlightData>();
+
+        if (!_diagnosticSaved)
+        {
+            _diagnosticSaved = true;
+            try { await SaveDiagnosticAsync(grid); } catch { }
+        }
 
         using var flightColumn = Crop(grid, FlightLeft, FlightRight);
         using var originColumn = Crop(grid, OriginLeft, OriginRight);
@@ -97,8 +102,6 @@ public static class FlightColumnReader
                 Economy: int.Parse(m.Groups["economy"].Value)))
             .ToList();
 
-        // Vuelo y hora identifican la fila. Si las cantidades difieren, no asociamos
-        // posiciones dudosas; esperamos la próxima captura estable.
         if (flights.Count == 0 || flights.Count != times.Count)
             return new List<FlightData>();
 
