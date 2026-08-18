@@ -18,7 +18,6 @@ public sealed class FlightData
     public int WCHC { get; set; }
     public int AVIH { get; set; }
     public int INF { get; set; }
-
     public int UMNR { get; set; }
     public int PETC { get; set; }
     public int DEAF { get; set; }
@@ -36,6 +35,27 @@ public sealed class FlightData
 
     public Dictionary<string, int> ExtraSpecialCounts { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+    public string Edits
+    {
+        get
+        {
+            var parts = new List<string>();
+            Add(parts, "WCHR", WCHR); Add(parts, "WCHS", WCHS); Add(parts, "WCHC", WCHC);
+            Add(parts, "AVIH", AVIH); Add(parts, "INF", INF); Add(parts, "UMNR", UMNR);
+            Add(parts, "PETC", PETC); Add(parts, "DEAF", DEAF); Add(parts, "BLND", BLND);
+            Add(parts, "MAAS", MAAS); Add(parts, "STCR", STCR); Add(parts, "MEDA", MEDA);
+            Add(parts, "WCLB", WCLB); Add(parts, "WCMP", WCMP); Add(parts, "SVAN", SVAN);
+            Add(parts, "ESAN", ESAN); Add(parts, "INAD", INAD); Add(parts, "DEPA", DEPA);
+            Add(parts, "DEPU", DEPU);
+
+            foreach (var item in ExtraSpecialCounts.OrderBy(x => x.Key))
+                Add(parts, item.Key, item.Value);
+
+            return string.Join(" · ", parts);
+        }
+    }
+
+    // Se mantiene por compatibilidad con exportaciones y código anterior.
     public string OtrosEspeciales
     {
         get
