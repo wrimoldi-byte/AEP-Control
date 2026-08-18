@@ -8,14 +8,21 @@ public sealed class ContinuousSpecialReader
     private sealed record SeenRow(string Code, string Canonical, int Occurrence);
     private sealed record ScreenRow(string Code, string Canonical, int Occurrence);
 
-    private static readonly Regex CodeRegex = new(
-        @"\b(WCHR|WCHS|WCHC|AVIH|INF|UMNR|PETC|DEAF|BLND|MAAS|STCR|MEDA|WCLBD|WCMP|SVAN|ESAN|INAD|DEPA|DEPU)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
+    private readonly Regex _codeRegex;
     private readonly List<SeenRow> _uniqueRows = new();
     private List<ScreenRow> _previousScreen = new();
 
     public int UniqueRows => _uniqueRows.Count;
+
+    public ContinuousSpecialReader()
+    {
+        var codes = SpecialCodeSettings.Load().Codes;
+        var pattern = string.Join("|", codes
+            .OrderByDescending(c => c.Length)
+            .Select(Regex.Escape));
+
+        _codeRegex = new Regex($@"\b({pattern})\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    }
 
     public SpecialCounts AddOcrText(string text)
     {
@@ -37,7 +44,7 @@ public sealed class ContinuousSpecialReader
         return BuildCounts();
     }
 
-    private static List<ScreenRow> ParseScreen(string text)
+    private List<ScreenRow> ParseScreen(string text)
     {
         var parsed = new List<(string Code, string Canonical)>();
 
@@ -46,7 +53,7 @@ public sealed class ContinuousSpecialReader
             var line = Regex.Replace(raw.ToUpperInvariant(), @"\s+", " ").Trim();
             if (line.Length < 3) continue;
 
-            var codeMatch = CodeRegex.Match(line);
+            var codeMatch = _codeRegex.Match(line);
             if (!codeMatch.Success) continue;
 
             var code = codeMatch.Value.ToUpperInvariant();
@@ -190,13 +197,17 @@ public sealed class ContinuousSpecialReader
                 case "MAAS": result.MAAS++; break;
                 case "STCR": result.STCR++; break;
                 case "MEDA": result.MEDA++; break;
-                case "WCLBD": result.WCLBD++; break;
+                case "WCLB": result.WCLB++; break;
                 case "WCMP": result.WCMP++; break;
                 case "SVAN": result.SVAN++; break;
                 case "ESAN": result.ESAN++; break;
                 case "INAD": result.INAD++; break;
                 case "DEPA": result.DEPA++; break;
                 case "DEPU": result.DEPU++; break;
+                default:
+                    result.Extra.TryGetValue(row.Code, out var current);
+                    result.Extra[row.Code] = current + 1;
+                    break;
             }
         }
         return result;
