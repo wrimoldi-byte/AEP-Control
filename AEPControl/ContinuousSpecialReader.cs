@@ -5,12 +5,14 @@ namespace AEPControl;
 
 public sealed class ContinuousSpecialReader
 {
-    private sealed record SeenRow(string Code, string Canonical, int Occurrence);
-    private sealed record ScreenRow(string Code, string Canonical, int Occurrence);
+    private sealed record SeenRow(string Code, string Canonical);
+    private sealed record ScreenRow(string Code, string Canonical);
 
     private readonly Regex _codeRegex;
     private readonly List<SeenRow> _uniqueRows = new();
-    private List<ScreenRow> _previousScreen = new();
+    private readonly LinkedList<List<ScreenRow>> _screenHistory = new();
+
+    private const int HistoryScreens = 6;
 
     public int UniqueRows => _uniqueRows.Count;
 
@@ -26,27 +28,32 @@ public sealed class ContinuousSpecialReader
 
     public SpecialCounts AddOcrText(string text)
     {
-        var screenRows = ParseScreen(text);
-        if (screenRows.Count == 0)
+        var current = ParseScreen(text);
+        if (current.Count == 0)
             return BuildCounts();
 
-        var overlap = FindScrollOverlap(_previousScreen, screenRows);
-        var startIndex = overlap;
-
-        for (var i = startIndex; i < screenRows.Count; i++)
+        if (_screenHistory.Count == 0)
         {
-            var row = screenRows[i];
-            if (!AlreadySeen(row.Code, row.Canonical, row.Occurrence))
-                _uniqueRows.Add(new SeenRow(row.Code, row.Canonical, row.Occurrence));
+            foreach (var row in current)
+                _uniqueRows.Add(new SeenRow(row.Code, row.Canonical));
+        }
+        else
+        {
+            var alreadyVisible = MatchAgainstRecentScreens(current);
+            for (var i = 0; i < current.Count; i++)
+            {
+                if (!alreadyVisible[i])
+                    _uniqueRows.Add(new SeenRow(current[i].Code, current[i].Canonical));
+            }
         }
 
-        _previousScreen = screenRows;
+        RememberScreen(current);
         return BuildCounts();
     }
 
     private List<ScreenRow> ParseScreen(string text)
     {
-        var parsed = new List<(string Code, string Canonical)>();
+        var result = new List<ScreenRow>();
 
         foreach (var raw in text.Replace('\r', '\n').Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
@@ -61,87 +68,75 @@ public sealed class ContinuousSpecialReader
             if (canonical.Length < code.Length)
                 canonical = code;
 
-            parsed.Add((code, canonical));
-        }
-
-        var occurrences = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        var result = new List<ScreenRow>(parsed.Count);
-        foreach (var row in parsed)
-        {
-            var key = $"{row.Code}|{row.Canonical}";
-            occurrences.TryGetValue(key, out var occurrence);
-            occurrence++;
-            occurrences[key] = occurrence;
-            result.Add(new ScreenRow(row.Code, row.Canonical, occurrence));
+            result.Add(new ScreenRow(code, canonical));
         }
 
         return result;
     }
 
-    private static int FindScrollOverlap(IReadOnlyList<ScreenRow> previous, IReadOnlyList<ScreenRow> current)
+    private bool[] MatchAgainstRecentScreens(IReadOnlyList<ScreenRow> current)
     {
-        if (previous.Count == 0 || current.Count == 0)
-            return 0;
+        var matchedCurrent = new bool[current.Count];
 
-        var max = Math.Min(previous.Count, current.Count);
-        for (var length = max; length >= 1; length--)
+        // Primero compara contra la captura inmediatamente anterior y después contra
+        // algunas capturas recientes. Así una fila que sigue visible por el scroll no
+        // vuelve a sumarse aunque el OCR cambie letras, espacios o parte del nombre.
+        foreach (var previous in _screenHistory.Reverse())
         {
-            var previousStart = previous.Count - length;
-            var matches = 0;
+            var usedPrevious = new bool[previous.Count];
 
-            for (var i = 0; i < length; i++)
+            for (var i = 0; i < current.Count; i++)
             {
-                if (RowsMatch(previous[previousStart + i], current[i]))
-                    matches++;
+                if (matchedCurrent[i]) continue;
+
+                var bestIndex = -1;
+                var bestSimilarity = 0.0;
+
+                for (var j = 0; j < previous.Count; j++)
+                {
+                    if (usedPrevious[j]) continue;
+                    if (!current[i].Code.Equals(previous[j].Code, StringComparison.OrdinalIgnoreCase)) continue;
+
+                    var similarity = Similarity(current[i].Canonical, previous[j].Canonical);
+                    var threshold = SimilarityThreshold(current[i].Canonical, previous[j].Canonical);
+                    if (similarity < threshold || similarity <= bestSimilarity) continue;
+
+                    bestSimilarity = similarity;
+                    bestIndex = j;
+                }
+
+                if (bestIndex >= 0)
+                {
+                    matchedCurrent[i] = true;
+                    usedPrevious[bestIndex] = true;
+                }
             }
 
-            var required = length < 3 ? length : length - 1;
-            if (matches >= required)
-                return length;
+            if (matchedCurrent.All(x => x)) break;
         }
 
-        return 0;
+        return matchedCurrent;
     }
 
-    private bool AlreadySeen(string code, string canonical, int occurrence)
+    private static double SimilarityThreshold(string a, string b)
     {
-        foreach (var seen in _uniqueRows)
-        {
-            if (!seen.Code.Equals(code, StringComparison.OrdinalIgnoreCase)) continue;
-            if (seen.Occurrence != occurrence) continue;
-
-            if (seen.Canonical.Equals(canonical, StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            if (Similarity(seen.Canonical, canonical) >= 0.76)
-                return true;
-        }
-
-        return false;
+        var minLength = Math.Min(a.Length, b.Length);
+        if (minLength <= 8) return 0.88;
+        if (minLength <= 16) return 0.72;
+        return 0.60;
     }
 
-    private static bool RowsMatch(ScreenRow a, ScreenRow b)
+    private void RememberScreen(List<ScreenRow> screen)
     {
-        if (!a.Code.Equals(b.Code, StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        if (a.Occurrence != b.Occurrence)
-            return false;
-
-        return a.Canonical.Equals(b.Canonical, StringComparison.OrdinalIgnoreCase)
-            || Similarity(a.Canonical, b.Canonical) >= 0.72;
+        _screenHistory.AddLast(screen);
+        while (_screenHistory.Count > HistoryScreens)
+            _screenHistory.RemoveFirst();
     }
 
     private static string Canonicalize(string line)
     {
-        var normalized = line
-            .Replace('O', '0')
-            .Replace('Q', '0')
-            .Replace('I', '1')
-            .Replace('L', '1');
-
-        var builder = new StringBuilder(normalized.Length);
-        foreach (var ch in normalized)
+        var builder = new StringBuilder(line.Length);
+        foreach (var ch in line)
         {
             if (char.IsLetterOrDigit(ch)) builder.Append(ch);
         }
