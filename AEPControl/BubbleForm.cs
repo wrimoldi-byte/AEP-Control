@@ -83,11 +83,8 @@ public sealed class BubbleForm : Form
             return;
         }
 
-        var others = flight.UMNR + flight.PETC + flight.DEAF + flight.BLND + flight.MAAS + flight.STCR + flight.MEDA
-            + flight.WCLBD + flight.WCMP + flight.SVAN + flight.ESAN + flight.INAD + flight.DEPA + flight.DEPU;
-
         _flight.Text = flight.Vuelo;
-        _counts.Text = $"WCHR {flight.WCHR} · WCHS {flight.WCHS} · WCHC {flight.WCHC}\nAVIH {flight.AVIH} · INF {flight.INF}\nOtros {others} · filas {uniqueRows}";
+        _counts.Text = $"WCHR {flight.WCHR} · WCHS {flight.WCHS} · WCHC {flight.WCHC}\nAVIH {flight.AVIH} · INF {flight.INF}\nOtros {flight.OtrosEspecialesTotal} · filas {uniqueRows}";
     }
 
     public void UpdateFlightCount(int count)
