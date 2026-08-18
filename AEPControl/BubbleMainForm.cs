@@ -20,7 +20,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v2.5";
+        Text = "AEP Control v2.6";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1280, 720);
         TopMost = true;
@@ -73,12 +73,7 @@ public sealed class BubbleMainForm : Form
         AddColumn("Hora", nameof(FlightData.Hora));
         AddColumn("Booking", nameof(FlightData.Booking));
         AddColumn("Equipo", nameof(FlightData.Equipo));
-        AddColumn("WCHR", nameof(FlightData.WCHR));
-        AddColumn("WCHS", nameof(FlightData.WCHS));
-        AddColumn("WCHC", nameof(FlightData.WCHC));
-        AddColumn("AVIH", nameof(FlightData.AVIH));
-        AddColumn("INF", nameof(FlightData.INF));
-        AddColumn("Otros especiales", nameof(FlightData.OtrosEspeciales));
+        AddColumn("EDITS", nameof(FlightData.Edits));
 
         Controls.AddRange(new Control[] { _grid, bar, _help, _title });
         ResetFlow();
