@@ -6,6 +6,8 @@ internal static class FlightSelectionEnhancer
 {
     public static void Attach(BubbleMainForm form)
     {
+        form.Text = "AEP Control v2.7";
+
         var type = typeof(BubbleMainForm);
         var gridField = type.GetField("_grid", BindingFlags.Instance | BindingFlags.NonPublic);
         var batchField = type.GetField("_batch", BindingFlags.Instance | BindingFlags.NonPublic);
