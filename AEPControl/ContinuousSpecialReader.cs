@@ -5,16 +5,17 @@ namespace AEPControl;
 
 public sealed class ContinuousSpecialReader
 {
-    private sealed record SeenRow(string Code, string Canonical);
-    private sealed record ScreenRow(string Code, string Canonical);
+    private sealed class SeenGroup
+    {
+        public string Code { get; init; } = string.Empty;
+        public string Canonical { get; set; } = string.Empty;
+        public int MaxOccurrences { get; set; }
+    }
 
     private readonly Regex _codeRegex;
-    private readonly List<SeenRow> _uniqueRows = new();
-    private readonly LinkedList<List<ScreenRow>> _screenHistory = new();
+    private readonly List<SeenGroup> _seenGroups = new();
 
-    private const int HistoryScreens = 6;
-
-    public int UniqueRows => _uniqueRows.Count;
+    public int UniqueRows => _seenGroups.Sum(g => g.MaxOccurrences);
 
     public ContinuousSpecialReader()
     {
@@ -32,28 +33,41 @@ public sealed class ContinuousSpecialReader
         if (current.Count == 0)
             return BuildCounts();
 
-        if (_screenHistory.Count == 0)
+        // Agrupamos las filas que aparecen en ESTA captura. Luego las comparamos contra
+        // todo lo visto durante el vuelo. De esta manera da igual si el usuario baja,
+        // llega al final y vuelve a subir: una fila vieja nunca se vuelve a sumar.
+        var currentGroups = GroupCurrentScreen(current);
+
+        foreach (var group in currentGroups)
         {
-            foreach (var row in current)
-                _uniqueRows.Add(new SeenRow(row.Code, row.Canonical));
-        }
-        else
-        {
-            var alreadyVisible = MatchAgainstRecentScreens(current);
-            for (var i = 0; i < current.Count; i++)
+            var seen = FindSeenGroup(group.Code, group.Canonical);
+            if (seen is null)
             {
-                if (!alreadyVisible[i])
-                    _uniqueRows.Add(new SeenRow(current[i].Code, current[i].Canonical));
+                _seenGroups.Add(new SeenGroup
+                {
+                    Code = group.Code,
+                    Canonical = group.Canonical,
+                    MaxOccurrences = group.Count
+                });
+                continue;
             }
+
+            // Si realmente hay dos filas iguales al mismo tiempo, conservamos ambas.
+            // Al volver a pasar por ellas con el scroll no aumenta el contador.
+            if (group.Count > seen.MaxOccurrences)
+                seen.MaxOccurrences = group.Count;
+
+            // Guardamos la lectura más completa para comparar mejor futuras capturas OCR.
+            if (group.Canonical.Length > seen.Canonical.Length)
+                seen.Canonical = group.Canonical;
         }
 
-        RememberScreen(current);
         return BuildCounts();
     }
 
-    private List<ScreenRow> ParseScreen(string text)
+    private List<(string Code, string Canonical)> ParseScreen(string text)
     {
-        var result = new List<ScreenRow>();
+        var result = new List<(string Code, string Canonical)>();
 
         foreach (var raw in text.Replace('\r', '\n').Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
@@ -68,75 +82,92 @@ public sealed class ContinuousSpecialReader
             if (canonical.Length < code.Length)
                 canonical = code;
 
-            result.Add(new ScreenRow(code, canonical));
+            result.Add((code, canonical));
         }
 
         return result;
     }
 
-    private bool[] MatchAgainstRecentScreens(IReadOnlyList<ScreenRow> current)
+    private static List<(string Code, string Canonical, int Count)> GroupCurrentScreen(
+        IReadOnlyList<(string Code, string Canonical)> rows)
     {
-        var matchedCurrent = new bool[current.Count];
+        var groups = new List<(string Code, string Canonical, int Count)>();
 
-        // Primero compara contra la captura inmediatamente anterior y después contra
-        // algunas capturas recientes. Así una fila que sigue visible por el scroll no
-        // vuelve a sumarse aunque el OCR cambie letras, espacios o parte del nombre.
-        foreach (var previous in _screenHistory.Reverse())
+        foreach (var row in rows)
         {
-            var usedPrevious = new bool[previous.Count];
+            var index = -1;
+            var best = 0.0;
 
-            for (var i = 0; i < current.Count; i++)
+            for (var i = 0; i < groups.Count; i++)
             {
-                if (matchedCurrent[i]) continue;
-
-                var bestIndex = -1;
-                var bestSimilarity = 0.0;
-
-                for (var j = 0; j < previous.Count; j++)
+                if (!groups[i].Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase)) continue;
+                var similarity = Similarity(groups[i].Canonical, row.Canonical);
+                if (similarity >= 0.94 && similarity > best)
                 {
-                    if (usedPrevious[j]) continue;
-                    if (!current[i].Code.Equals(previous[j].Code, StringComparison.OrdinalIgnoreCase)) continue;
-
-                    var similarity = Similarity(current[i].Canonical, previous[j].Canonical);
-                    var threshold = SimilarityThreshold(current[i].Canonical, previous[j].Canonical);
-                    if (similarity < threshold || similarity <= bestSimilarity) continue;
-
-                    bestSimilarity = similarity;
-                    bestIndex = j;
-                }
-
-                if (bestIndex >= 0)
-                {
-                    matchedCurrent[i] = true;
-                    usedPrevious[bestIndex] = true;
+                    best = similarity;
+                    index = i;
                 }
             }
 
-            if (matchedCurrent.All(x => x)) break;
+            if (index < 0)
+            {
+                groups.Add((row.Code, row.Canonical, 1));
+            }
+            else
+            {
+                var existing = groups[index];
+                groups[index] = (existing.Code,
+                    row.Canonical.Length > existing.Canonical.Length ? row.Canonical : existing.Canonical,
+                    existing.Count + 1);
+            }
         }
 
-        return matchedCurrent;
+        return groups;
+    }
+
+    private SeenGroup? FindSeenGroup(string code, string canonical)
+    {
+        SeenGroup? bestGroup = null;
+        var bestSimilarity = 0.0;
+
+        foreach (var seen in _seenGroups)
+        {
+            if (!seen.Code.Equals(code, StringComparison.OrdinalIgnoreCase)) continue;
+
+            if (seen.Canonical.Equals(canonical, StringComparison.OrdinalIgnoreCase))
+                return seen;
+
+            var similarity = Similarity(seen.Canonical, canonical);
+            var threshold = SimilarityThreshold(seen.Canonical, canonical);
+            if (similarity >= threshold && similarity > bestSimilarity)
+            {
+                bestSimilarity = similarity;
+                bestGroup = seen;
+            }
+        }
+
+        return bestGroup;
     }
 
     private static double SimilarityThreshold(string a, string b)
     {
         var minLength = Math.Min(a.Length, b.Length);
-        if (minLength <= 8) return 0.88;
-        if (minLength <= 16) return 0.72;
-        return 0.60;
-    }
-
-    private void RememberScreen(List<ScreenRow> screen)
-    {
-        _screenHistory.AddLast(screen);
-        while (_screenHistory.Count > HistoryScreens)
-            _screenHistory.RemoveFirst();
+        if (minLength <= 8) return 0.94;
+        if (minLength <= 16) return 0.88;
+        if (minLength <= 28) return 0.84;
+        return 0.80;
     }
 
     private static string Canonicalize(string line)
     {
-        var builder = new StringBuilder(line.Length);
-        foreach (var ch in line)
+        var normalized = line
+            .Replace('Q', '0')
+            .Replace('O', '0')
+            .Replace('I', '1')
+            .Replace('L', '1');
+
+        var builder = new StringBuilder(normalized.Length);
+        foreach (var ch in normalized)
         {
             if (char.IsLetterOrDigit(ch)) builder.Append(ch);
         }
@@ -176,35 +207,41 @@ public sealed class ContinuousSpecialReader
     private SpecialCounts BuildCounts()
     {
         var result = new SpecialCounts();
-        foreach (var row in _uniqueRows)
+        foreach (var group in _seenGroups)
         {
-            switch (row.Code)
-            {
-                case "WCHR": result.WCHR++; break;
-                case "WCHS": result.WCHS++; break;
-                case "WCHC": result.WCHC++; break;
-                case "AVIH": result.AVIH++; break;
-                case "INF": result.INF++; break;
-                case "UMNR": result.UMNR++; break;
-                case "PETC": result.PETC++; break;
-                case "DEAF": result.DEAF++; break;
-                case "BLND": result.BLND++; break;
-                case "MAAS": result.MAAS++; break;
-                case "STCR": result.STCR++; break;
-                case "MEDA": result.MEDA++; break;
-                case "WCLB": result.WCLB++; break;
-                case "WCMP": result.WCMP++; break;
-                case "SVAN": result.SVAN++; break;
-                case "ESAN": result.ESAN++; break;
-                case "INAD": result.INAD++; break;
-                case "DEPA": result.DEPA++; break;
-                case "DEPU": result.DEPU++; break;
-                default:
-                    result.Extra.TryGetValue(row.Code, out var current);
-                    result.Extra[row.Code] = current + 1;
-                    break;
-            }
+            for (var i = 0; i < group.MaxOccurrences; i++)
+                AddCount(result, group.Code);
         }
         return result;
+    }
+
+    private static void AddCount(SpecialCounts result, string code)
+    {
+        switch (code)
+        {
+            case "WCHR": result.WCHR++; break;
+            case "WCHS": result.WCHS++; break;
+            case "WCHC": result.WCHC++; break;
+            case "AVIH": result.AVIH++; break;
+            case "INF": result.INF++; break;
+            case "UMNR": result.UMNR++; break;
+            case "PETC": result.PETC++; break;
+            case "DEAF": result.DEAF++; break;
+            case "BLND": result.BLND++; break;
+            case "MAAS": result.MAAS++; break;
+            case "STCR": result.STCR++; break;
+            case "MEDA": result.MEDA++; break;
+            case "WCLB": result.WCLB++; break;
+            case "WCMP": result.WCMP++; break;
+            case "SVAN": result.SVAN++; break;
+            case "ESAN": result.ESAN++; break;
+            case "INAD": result.INAD++; break;
+            case "DEPA": result.DEPA++; break;
+            case "DEPU": result.DEPU++; break;
+            default:
+                result.Extra.TryGetValue(code, out var current);
+                result.Extra[code] = current + 1;
+                break;
+        }
     }
 }
