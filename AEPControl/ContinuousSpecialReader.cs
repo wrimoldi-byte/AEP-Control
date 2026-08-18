@@ -6,14 +6,38 @@ namespace AEPControl;
 public sealed class ContinuousSpecialReader
 {
     private sealed record SeenRow(string Code, string Canonical, int Occurrence);
+    private sealed record ScreenRow(string Code, string Canonical, int Occurrence);
 
     private readonly List<SeenRow> _uniqueRows = new();
+    private List<ScreenRow> _previousScreen = new();
 
     public int UniqueRows => _uniqueRows.Count;
 
     public SpecialCounts AddOcrText(string text)
     {
-        var screenRows = new List<(string Code, string Canonical)>();
+        var screenRows = ParseScreen(text);
+        if (screenRows.Count == 0)
+            return BuildCounts();
+
+        // Cuando hacemos scroll, varias filas de la pantalla anterior siguen visibles.
+        // Detectamos ese solapamiento y sólo procesamos las filas realmente nuevas.
+        var overlap = FindScrollOverlap(_previousScreen, screenRows);
+        var startIndex = overlap;
+
+        for (var i = startIndex; i < screenRows.Count; i++)
+        {
+            var row = screenRows[i];
+            if (!AlreadySeen(row.Code, row.Canonical, row.Occurrence))
+                _uniqueRows.Add(new SeenRow(row.Code, row.Canonical, row.Occurrence));
+        }
+
+        _previousScreen = screenRows;
+        return BuildCounts();
+    }
+
+    private static List<ScreenRow> ParseScreen(string text)
+    {
+        var parsed = new List<(string Code, string Canonical)>();
 
         foreach (var raw in text.Replace('\r', '\n').Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
@@ -28,23 +52,50 @@ public sealed class ContinuousSpecialReader
             if (canonical.Length < code.Length)
                 canonical = code;
 
-            screenRows.Add((code, canonical));
+            parsed.Add((code, canonical));
         }
 
-        // La misma fila puede aparecer varias veces en una pantalla. Conservamos la
-        // ocurrencia 1, 2, 3... para no fusionar dos PAX reales con el mismo texto.
-        foreach (var group in screenRows.GroupBy(r => $"{r.Code}|{r.Canonical}", StringComparer.OrdinalIgnoreCase))
+        // Numeramos ocurrencias iguales dentro de ESTA pantalla. Esto permite conservar
+        // dos PAX reales con el mismo texto sin volver a contarlos al reaparecer por scroll.
+        var occurrences = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<ScreenRow>(parsed.Count);
+        foreach (var row in parsed)
         {
-            var sample = group.First();
-            var count = group.Count();
-            for (var occurrence = 1; occurrence <= count; occurrence++)
-            {
-                if (!AlreadySeen(sample.Code, sample.Canonical, occurrence))
-                    _uniqueRows.Add(new SeenRow(sample.Code, sample.Canonical, occurrence));
-            }
+            var key = $"{row.Code}|{row.Canonical}";
+            occurrences.TryGetValue(key, out var occurrence);
+            occurrence++;
+            occurrences[key] = occurrence;
+            result.Add(new ScreenRow(row.Code, row.Canonical, occurrence));
         }
 
-        return BuildCounts();
+        return result;
+    }
+
+    private static int FindScrollOverlap(IReadOnlyList<ScreenRow> previous, IReadOnlyList<ScreenRow> current)
+    {
+        if (previous.Count == 0 || current.Count == 0)
+            return 0;
+
+        var max = Math.Min(previous.Count, current.Count);
+        for (var length = max; length >= 1; length--)
+        {
+            var previousStart = previous.Count - length;
+            var matches = 0;
+
+            for (var i = 0; i < length; i++)
+            {
+                if (RowsMatch(previous[previousStart + i], current[i]))
+                    matches++;
+            }
+
+            // OCR puede cambiar una fila entre capturas. Pedimos coincidencia fuerte,
+            // pero toleramos un error aislado en bloques de tres o más filas.
+            var required = length < 3 ? length : length - 1;
+            if (matches >= required)
+                return length;
+        }
+
+        return 0;
     }
 
     private bool AlreadySeen(string code, string canonical, int occurrence)
@@ -57,13 +108,24 @@ public sealed class ContinuousSpecialReader
             if (seen.Canonical.Equals(canonical, StringComparison.OrdinalIgnoreCase))
                 return true;
 
-            // Windows OCR suele variar una o dos letras/espacios de la misma fila
-            // entre capturas. Consideramos la misma fila cuando la similitud es alta.
-            if (Similarity(seen.Canonical, canonical) >= 0.82)
+            // El OCR de Windows suele variar letras o espacios de la misma fila.
+            if (Similarity(seen.Canonical, canonical) >= 0.76)
                 return true;
         }
 
         return false;
+    }
+
+    private static bool RowsMatch(ScreenRow a, ScreenRow b)
+    {
+        if (!a.Code.Equals(b.Code, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (a.Occurrence != b.Occurrence)
+            return false;
+
+        return a.Canonical.Equals(b.Canonical, StringComparison.OrdinalIgnoreCase)
+            || Similarity(a.Canonical, b.Canonical) >= 0.72;
     }
 
     private static string Canonicalize(string line)
