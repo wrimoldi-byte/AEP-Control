@@ -14,14 +14,15 @@ public sealed class BubbleMainForm : Form
     private readonly Button _export = new();
     private int _stage;
     private int _index = -1;
+    private bool _chooseStartFromSelection;
     private CancellationTokenSource? _cts;
     private BubbleForm? _bubble;
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v1.9";
+        Text = "AEP Control v2.4";
         StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(1180, 700);
+        Size = new Size(1240, 720);
         TopMost = true;
 
         _title.Dock = DockStyle.Top;
@@ -58,6 +59,8 @@ public sealed class BubbleMainForm : Form
         _grid.DataSource = _flights;
         _grid.AllowUserToAddRows = false;
         _grid.RowHeadersVisible = false;
+        _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        _grid.MultiSelect = false;
         _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         AddColumn("Tipo", nameof(FlightData.Movimiento));
         AddColumn("Vuelo", nameof(FlightData.Vuelo));
@@ -70,6 +73,7 @@ public sealed class BubbleMainForm : Form
         AddColumn("WCHC", nameof(FlightData.WCHC));
         AddColumn("AVIH", nameof(FlightData.AVIH));
         AddColumn("INF", nameof(FlightData.INF));
+        AddColumn("Otros especiales", nameof(FlightData.OtrosEspeciales));
 
         Controls.AddRange(new Control[] { _grid, bar, _help, _title });
         ResetFlow();
@@ -85,6 +89,7 @@ public sealed class BubbleMainForm : Form
         _batch.Clear();
         _stage = 0;
         _index = -1;
+        _chooseStartFromSelection = false;
         _action.Visible = true;
         _export.Enabled = false;
         _title.Text = "Paso 1 — Vuelos de llegada";
@@ -198,8 +203,11 @@ public sealed class BubbleMainForm : Form
         _export.Enabled = _flights.Count > 0;
         _stage = nextStage;
         _index = 0;
-        _status.Text = $"Lista terminada: {_batch.Count} vuelos únicos.";
-        PrepareFlight();
+        _chooseStartFromSelection = true;
+        _title.Text = $"{movement}s — elegí desde qué vuelo comenzar";
+        _help.Text = "Seleccioná en la tabla el vuelo desde el que querés empezar a leer especiales. Después tocá Iniciar. Desde ahí continuará automáticamente hacia abajo.";
+        _action.Text = "Iniciar especiales desde vuelo seleccionado";
+        _status.Text = $"Lista terminada: {_batch.Count} vuelos únicos. Elegí una fila para comenzar.";
     }
 
     private void PrepareFlight()
@@ -209,10 +217,42 @@ public sealed class BubbleMainForm : Form
         _help.Text = $"Entrá al vuelo {f.Vuelo}, escribí SS y abrí SusEdit. Tocá el botón y marcá la lista. La ventana se convertirá en una burbuja flotante.";
         _action.Text = $"Iniciar burbuja OCR de {f.Vuelo}";
         _status.Text = $"Vuelo {_index + 1} de {_batch.Count}.";
+
+        var rowIndex = _flights.IndexOf(f);
+        if (rowIndex >= 0)
+        {
+            _grid.ClearSelection();
+            _grid.Rows[rowIndex].Selected = true;
+            _grid.CurrentCell = _grid.Rows[rowIndex].Cells[0];
+            if (rowIndex < _grid.RowCount)
+                _grid.FirstDisplayedScrollingRowIndex = rowIndex;
+        }
+    }
+
+    private void ApplySelectedStartFlight()
+    {
+        if (!_chooseStartFromSelection) return;
+
+        var selected = _grid.SelectedRows.Count > 0
+            ? _grid.SelectedRows[0].DataBoundItem as FlightData
+            : _grid.CurrentRow?.DataBoundItem as FlightData;
+
+        if (selected is not null)
+        {
+            var selectedIndex = _batch.IndexOf(selected);
+            if (selectedIndex >= 0)
+                _index = selectedIndex;
+        }
+
+        _chooseStartFromSelection = false;
+        PrepareFlight();
     }
 
     private async Task StartBubbleAsync()
     {
+        ApplySelectedStartFlight();
+        if (_index < 0 || _index >= _batch.Count) return;
+
         var f = _batch[_index];
         Hide();
         await Task.Delay(250);
@@ -237,7 +277,8 @@ public sealed class BubbleMainForm : Form
                 if (!string.IsNullOrWhiteSpace(text))
                 {
                     var c = reader.AddOcrText(text);
-                    f.WCHR = c.WCHR; f.WCHS = c.WCHS; f.WCHC = c.WCHC; f.AVIH = c.AVIH; f.INF = c.INF;
+                    CopyCounts(f, c);
+                    _grid.Refresh();
                 }
 
                 _bubble.UpdateCounts(f, reader.UniqueRows);
@@ -250,6 +291,14 @@ public sealed class BubbleMainForm : Form
             MessageBox.Show(ex.Message, "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Error);
             FinishFlight();
         }
+    }
+
+    private static void CopyCounts(FlightData f, SpecialCounts c)
+    {
+        f.WCHR = c.WCHR; f.WCHS = c.WCHS; f.WCHC = c.WCHC; f.AVIH = c.AVIH; f.INF = c.INF;
+        f.UMNR = c.UMNR; f.PETC = c.PETC; f.DEAF = c.DEAF; f.BLND = c.BLND; f.MAAS = c.MAAS;
+        f.STCR = c.STCR; f.MEDA = c.MEDA; f.WCLBD = c.WCLBD; f.WCMP = c.WCMP; f.SVAN = c.SVAN;
+        f.ESAN = c.ESAN; f.INAD = c.INAD; f.DEPA = c.DEPA; f.DEPU = c.DEPU;
     }
 
     private void FinishFlight()
