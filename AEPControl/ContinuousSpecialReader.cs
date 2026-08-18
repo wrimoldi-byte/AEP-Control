@@ -38,10 +38,8 @@ public sealed class ContinuousSpecialReader
         if (current.Count == 0)
             return BuildCounts();
 
-        // Primera defensa contra duplicados: si el mismo edit vuelve a aparecer para el
-        // mismo asiento, no puede volver a sumarse aunque el OCR del nombre cambie mucho.
-        // Usamos ASIENTO + CODIGO para no perder casos reales donde el mismo pasajero
-        // tiene más de un edit distinto (por ejemplo WCHR e INF).
+        // Un mismo asiento puede tener varios edits diferentes.
+        // Sólo eliminamos repetidos de la MISMA combinación ASIENTO + EDIT.
         current = current
             .GroupBy(r => SeatCodeKey(r.Seat, r.Code), StringComparer.OrdinalIgnoreCase)
             .Select(g => g.OrderByDescending(r => r.Canonical.Length).First())
@@ -75,17 +73,26 @@ public sealed class ContinuousSpecialReader
             var line = Regex.Replace(raw.ToUpperInvariant(), @"\s+", " ").Trim();
             if (line.Length < 3) continue;
 
-            var codeMatch = _codeRegex.Match(line);
-            if (!codeMatch.Success) continue;
+            // IMPORTANTE: una misma línea de pasajero puede traer más de un edit.
+            // Antes usábamos Match() y sólo tomábamos el primero. Ahora usamos Matches()
+            // y generamos una entrada independiente por cada código encontrado.
+            var codeMatches = _codeRegex.Matches(line);
+            if (codeMatches.Count == 0) continue;
 
-            var code = codeMatch.Value.ToUpperInvariant();
             var seatMatch = SeatRegex.Match(line);
             var seat = seatMatch.Success ? NormalizeSeat(seatMatch.Groups["seat"].Value) : string.Empty;
             var canonical = Canonicalize(line);
-            if (canonical.Length < code.Length)
-                canonical = code;
 
-            result.Add(new ScreenRow(code, seat, canonical));
+            var codesOnLine = codeMatches
+                .Select(m => m.Value.ToUpperInvariant())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            foreach (var code in codesOnLine)
+            {
+                var rowCanonical = canonical.Length < code.Length ? code : canonical;
+                result.Add(new ScreenRow(code, seat, rowCanonical));
+            }
         }
 
         return result;
@@ -93,7 +100,7 @@ public sealed class ContinuousSpecialReader
 
     private void AddIfNew(ScreenRow row)
     {
-        if (IsAlreadySeenBySeat(row)) return;
+        if (IsAlreadySeenBySeatAndCode(row)) return;
 
         if (string.IsNullOrWhiteSpace(row.Seat))
         {
@@ -106,7 +113,7 @@ public sealed class ContinuousSpecialReader
         _sequence.Add(new SeenRow { Code = row.Code, Seat = row.Seat, Canonical = row.Canonical });
     }
 
-    private bool IsAlreadySeenBySeat(ScreenRow row)
+    private bool IsAlreadySeenBySeatAndCode(ScreenRow row)
     {
         if (string.IsNullOrWhiteSpace(row.Seat)) return false;
 
@@ -172,7 +179,7 @@ public sealed class ContinuousSpecialReader
         if (leadingCount > 0)
         {
             var leading = current.Take(leadingCount)
-                .Where(r => !IsAlreadySeenBySeat(r))
+                .Where(r => !IsAlreadySeenBySeatAndCode(r))
                 .Where(r => string.IsNullOrWhiteSpace(r.Seat) || !_sequence.Any(s => s.Code.Equals(r.Code, StringComparison.OrdinalIgnoreCase) && RowSimilarity(r, s) >= 0.84))
                 .Select(r => new SeenRow { Code = r.Code, Seat = r.Seat, Canonical = r.Canonical })
                 .ToList();
@@ -184,9 +191,9 @@ public sealed class ContinuousSpecialReader
         {
             var row = current[i];
 
-            // Esta condición es independiente del sentido del scroll y de la posición
-            // de la fila: un asiento+edit ya leído no vuelve a entrar nunca.
-            if (IsAlreadySeenBySeat(row))
+            // El bloqueo de duplicados es por ASIENTO + EDIT, no sólo por asiento.
+            // Ej.: 12A WCHR + 12A INF son dos registros válidos; 12A WCHR repetido no.
+            if (IsAlreadySeenBySeatAndCode(row))
                 continue;
 
             var globalIndex = i + offset;
@@ -210,7 +217,6 @@ public sealed class ContinuousSpecialReader
         value = value.Trim().ToUpperInvariant();
         if (value.Length < 2) return value;
 
-        // Corrige errores OCR frecuentes sólo dentro del número de asiento.
         var numberPart = value[..^1]
             .Replace('O', '0')
             .Replace('Q', '0')
