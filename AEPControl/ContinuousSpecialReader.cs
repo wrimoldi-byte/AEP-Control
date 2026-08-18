@@ -8,6 +8,10 @@ public sealed class ContinuousSpecialReader
     private sealed record SeenRow(string Code, string Canonical, int Occurrence);
     private sealed record ScreenRow(string Code, string Canonical, int Occurrence);
 
+    private static readonly Regex CodeRegex = new(
+        @"\b(WCHR|WCHS|WCHC|AVIH|INF|UMNR|PETC|DEAF|BLND|MAAS|STCR|MEDA|WCLBD|WCMP|SVAN|ESAN|INAD|DEPA|DEPU)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private readonly List<SeenRow> _uniqueRows = new();
     private List<ScreenRow> _previousScreen = new();
 
@@ -19,8 +23,6 @@ public sealed class ContinuousSpecialReader
         if (screenRows.Count == 0)
             return BuildCounts();
 
-        // Cuando hacemos scroll, varias filas de la pantalla anterior siguen visibles.
-        // Detectamos ese solapamiento y sólo procesamos las filas realmente nuevas.
         var overlap = FindScrollOverlap(_previousScreen, screenRows);
         var startIndex = overlap;
 
@@ -42,12 +44,12 @@ public sealed class ContinuousSpecialReader
         foreach (var raw in text.Replace('\r', '\n').Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var line = Regex.Replace(raw.ToUpperInvariant(), @"\s+", " ").Trim();
-            if (line.Length < 4) continue;
+            if (line.Length < 3) continue;
 
-            var codeMatch = Regex.Match(line, @"\b(WCHR|WCHS|WCHC|AVIH|INF)\b");
+            var codeMatch = CodeRegex.Match(line);
             if (!codeMatch.Success) continue;
 
-            var code = codeMatch.Value;
+            var code = codeMatch.Value.ToUpperInvariant();
             var canonical = Canonicalize(line);
             if (canonical.Length < code.Length)
                 canonical = code;
@@ -55,8 +57,6 @@ public sealed class ContinuousSpecialReader
             parsed.Add((code, canonical));
         }
 
-        // Numeramos ocurrencias iguales dentro de ESTA pantalla. Esto permite conservar
-        // dos PAX reales con el mismo texto sin volver a contarlos al reaparecer por scroll.
         var occurrences = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var result = new List<ScreenRow>(parsed.Count);
         foreach (var row in parsed)
@@ -88,8 +88,6 @@ public sealed class ContinuousSpecialReader
                     matches++;
             }
 
-            // OCR puede cambiar una fila entre capturas. Pedimos coincidencia fuerte,
-            // pero toleramos un error aislado en bloques de tres o más filas.
             var required = length < 3 ? length : length - 1;
             if (matches >= required)
                 return length;
@@ -108,7 +106,6 @@ public sealed class ContinuousSpecialReader
             if (seen.Canonical.Equals(canonical, StringComparison.OrdinalIgnoreCase))
                 return true;
 
-            // El OCR de Windows suele variar letras o espacios de la misma fila.
             if (Similarity(seen.Canonical, canonical) >= 0.76)
                 return true;
         }
@@ -186,6 +183,20 @@ public sealed class ContinuousSpecialReader
                 case "WCHC": result.WCHC++; break;
                 case "AVIH": result.AVIH++; break;
                 case "INF": result.INF++; break;
+                case "UMNR": result.UMNR++; break;
+                case "PETC": result.PETC++; break;
+                case "DEAF": result.DEAF++; break;
+                case "BLND": result.BLND++; break;
+                case "MAAS": result.MAAS++; break;
+                case "STCR": result.STCR++; break;
+                case "MEDA": result.MEDA++; break;
+                case "WCLBD": result.WCLBD++; break;
+                case "WCMP": result.WCMP++; break;
+                case "SVAN": result.SVAN++; break;
+                case "ESAN": result.ESAN++; break;
+                case "INAD": result.INAD++; break;
+                case "DEPA": result.DEPA++; break;
+                case "DEPU": result.DEPU++; break;
             }
         }
         return result;
