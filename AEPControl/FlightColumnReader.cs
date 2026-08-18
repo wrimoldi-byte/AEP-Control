@@ -6,12 +6,14 @@ namespace AEPControl;
 public static class FlightColumnReader
 {
     private static readonly Regex FlightRegex = new(@"\b(?<flight>\d{3,4})\b", RegexOptions.Compiled);
-    private static readonly Regex OriginRegex = new(@"\b(?<origin>[A-Z]{3})\b", RegexOptions.Compiled);
+    private static readonly Regex OriginTokenRegex = new(@"\b(?<origin>[A-Z0-9]{3})\b", RegexOptions.Compiled);
     private static readonly Regex RawTimeRegex = new(@"\b(?<time>\d{4})\b", RegexOptions.Compiled);
     private static readonly Regex BookingRegex = new(@"\b(?<premium>\d{1,3})\s*[/\\|]\s*(?<economy>\d{1,3})\*?\b", RegexOptions.Compiled);
     private static bool _diagnosticSaved;
     private static HashSet<string> _previousSignatures = new(StringComparer.OrdinalIgnoreCase);
     private static DateTime _lastReadUtc = DateTime.MinValue;
+
+    private static readonly string[] PriorityOrigins = { "GRU", "SCL", "LIM", "GIG" };
 
     private const double FlightLeft = 0.186;
     private const double FlightRight = 0.282;
@@ -94,10 +96,7 @@ public static class FlightColumnReader
             .Where(IsPlausibleFlight)
             .ToList();
 
-        var origins = OriginRegex.Matches(Normalize(originText))
-            .Select(m => m.Groups["origin"].Value)
-            .Where(IsPlausibleAirport)
-            .ToList();
+        var origins = ParseOrigins(originText);
 
         var times = RawTimeRegex.Matches(Normalize(timeText))
             .Select(m => NormalizeTime(m.Groups["time"].Value))
@@ -134,6 +133,48 @@ public static class FlightColumnReader
         }
 
         return result;
+    }
+
+    private static List<string> ParseOrigins(string text)
+    {
+        var normalized = text.ToUpperInvariant();
+        var result = new List<string>();
+
+        foreach (Match match in OriginTokenRegex.Matches(normalized))
+        {
+            var raw = match.Groups["origin"].Value;
+            var corrected = CorrectOrigin(raw);
+            if (corrected is not null && IsPlausibleAirport(corrected))
+                result.Add(corrected);
+        }
+
+        return result;
+    }
+
+    private static string? CorrectOrigin(string raw)
+    {
+        raw = raw.ToUpperInvariant();
+
+        if (PriorityOrigins.Contains(raw, StringComparer.OrdinalIgnoreCase))
+            return raw;
+
+        // Errores habituales del OCR de Windows en códigos IATA.
+        var corrected = raw
+            .Replace('1', 'I')
+            .Replace('0', 'O')
+            .Replace('5', 'S')
+            .Replace('8', 'B');
+
+        if (PriorityOrigins.Contains(corrected, StringComparer.OrdinalIgnoreCase))
+            return corrected;
+
+        // Casos frecuentes concretos: G1G -> GIG, L1M -> LIM, SC1 -> SCL.
+        if (raw is "G1G" or "GIG") return "GIG";
+        if (raw is "L1M" or "LIM") return "LIM";
+        if (raw is "SC1" or "SCL") return "SCL";
+        if (raw is "GRU") return "GRU";
+
+        return raw.All(char.IsLetter) ? raw : null;
     }
 
     private static List<FlightData> ConfirmStableRows(List<FlightData> parsed)
