@@ -20,9 +20,9 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v2.4";
+        Text = "AEP Control v2.5";
         StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(1240, 720);
+        Size = new Size(1280, 720);
         TopMost = true;
 
         _title.Dock = DockStyle.Top;
@@ -46,13 +46,18 @@ public sealed class BubbleMainForm : Form
 
         var reset = new Button { Text = "Reiniciar", AutoSize = true, Padding = new Padding(10, 7, 10, 7) };
         reset.Click += (_, _) => ResetFlow();
+
         var readDocuments = new Button { Text = "Leer documentación de PAX", AutoSize = true, Padding = new Padding(10, 7, 10, 7) };
         readDocuments.Click += async (_, _) => await ReadPassengerDocumentsAsync();
+
+        var configuration = new Button { Text = "Configuración", AutoSize = true, Padding = new Padding(10, 7, 10, 7) };
+        configuration.Click += (_, _) => OpenConfiguration();
+
         _status.AutoSize = true;
         _status.Padding = new Padding(12, 11, 0, 0);
 
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 62, Padding = new Padding(12, 8, 12, 4) };
-        bar.Controls.AddRange(new Control[] { _action, readDocuments, _export, reset, _status });
+        bar.Controls.AddRange(new Control[] { _action, readDocuments, _export, configuration, reset, _status });
 
         _grid.Dock = DockStyle.Fill;
         _grid.AutoGenerateColumns = false;
@@ -80,6 +85,13 @@ public sealed class BubbleMainForm : Form
     }
 
     private void AddColumn(string text, string property) => _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = text, DataPropertyName = property });
+
+    private void OpenConfiguration()
+    {
+        using var form = new ConfigurationForm();
+        if (form.ShowDialog(this) == DialogResult.OK)
+            _status.Text = "Configuración guardada. Los nuevos códigos se usarán en la próxima lectura de especiales.";
+    }
 
     private void ResetFlow()
     {
@@ -297,8 +309,12 @@ public sealed class BubbleMainForm : Form
     {
         f.WCHR = c.WCHR; f.WCHS = c.WCHS; f.WCHC = c.WCHC; f.AVIH = c.AVIH; f.INF = c.INF;
         f.UMNR = c.UMNR; f.PETC = c.PETC; f.DEAF = c.DEAF; f.BLND = c.BLND; f.MAAS = c.MAAS;
-        f.STCR = c.STCR; f.MEDA = c.MEDA; f.WCLBD = c.WCLBD; f.WCMP = c.WCMP; f.SVAN = c.SVAN;
+        f.STCR = c.STCR; f.MEDA = c.MEDA; f.WCLB = c.WCLB; f.WCMP = c.WCMP; f.SVAN = c.SVAN;
         f.ESAN = c.ESAN; f.INAD = c.INAD; f.DEPA = c.DEPA; f.DEPU = c.DEPU;
+
+        f.ExtraSpecialCounts.Clear();
+        foreach (var item in c.Extra)
+            f.ExtraSpecialCounts[item.Key] = item.Value;
     }
 
     private void FinishFlight()
