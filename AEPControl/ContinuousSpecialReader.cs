@@ -5,17 +5,23 @@ namespace AEPControl;
 
 public sealed class ContinuousSpecialReader
 {
-    private sealed class SeenGroup
+    private sealed class SeenRow
     {
         public string Code { get; init; } = string.Empty;
         public string Canonical { get; set; } = string.Empty;
-        public int MaxOccurrences { get; set; }
     }
 
-    private readonly Regex _codeRegex;
-    private readonly List<SeenGroup> _seenGroups = new();
+    private sealed record ScreenRow(string Code, string Canonical);
+    private sealed record Alignment(int Offset, int Matches, int Mismatches, int Overlap, double Score);
 
-    public int UniqueRows => _seenGroups.Sum(g => g.MaxOccurrences);
+    private readonly Regex _codeRegex;
+
+    // En vez de recordar sólo "filas parecidas", armamos una secuencia global de la
+    // lista SusEdit. Cada nueva pantalla se alinea contra esa secuencia. Así, al bajar
+    // y luego volver a subir, la pantalla encaja en una zona ya conocida y NO suma.
+    private readonly List<SeenRow> _sequence = new();
+
+    public int UniqueRows => _sequence.Count;
 
     public ContinuousSpecialReader()
     {
@@ -33,41 +39,34 @@ public sealed class ContinuousSpecialReader
         if (current.Count == 0)
             return BuildCounts();
 
-        // Agrupamos las filas que aparecen en ESTA captura. Luego las comparamos contra
-        // todo lo visto durante el vuelo. De esta manera da igual si el usuario baja,
-        // llega al final y vuelve a subir: una fila vieja nunca se vuelve a sumar.
-        var currentGroups = GroupCurrentScreen(current);
-
-        foreach (var group in currentGroups)
+        if (_sequence.Count == 0)
         {
-            var seen = FindSeenGroup(group.Code, group.Canonical);
-            if (seen is null)
-            {
-                _seenGroups.Add(new SeenGroup
-                {
-                    Code = group.Code,
-                    Canonical = group.Canonical,
-                    MaxOccurrences = group.Count
-                });
-                continue;
-            }
-
-            // Si realmente hay dos filas iguales al mismo tiempo, conservamos ambas.
-            // Al volver a pasar por ellas con el scroll no aumenta el contador.
-            if (group.Count > seen.MaxOccurrences)
-                seen.MaxOccurrences = group.Count;
-
-            // Guardamos la lectura más completa para comparar mejor futuras capturas OCR.
-            if (group.Canonical.Length > seen.Canonical.Length)
-                seen.Canonical = group.Canonical;
+            foreach (var row in current)
+                _sequence.Add(new SeenRow { Code = row.Code, Canonical = row.Canonical });
+            return BuildCounts();
         }
 
+        var alignment = FindBestAlignment(current);
+        if (alignment is null)
+        {
+            // Un salto grande sin ninguna fila común puede ser una zona nueva. Sólo la
+            // agregamos si realmente no encontramos coincidencias fuertes en toda la
+            // lista. Si hay alguna coincidencia, preferimos no sumar antes que duplicar.
+            if (!HasAnyStrongGlobalMatch(current))
+            {
+                foreach (var row in current)
+                    _sequence.Add(new SeenRow { Code = row.Code, Canonical = row.Canonical });
+            }
+            return BuildCounts();
+        }
+
+        MergeAlignedScreen(current, alignment.Offset);
         return BuildCounts();
     }
 
-    private List<(string Code, string Canonical)> ParseScreen(string text)
+    private List<ScreenRow> ParseScreen(string text)
     {
-        var result = new List<(string Code, string Canonical)>();
+        var result = new List<ScreenRow>();
 
         foreach (var raw in text.Replace('\r', '\n').Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
@@ -82,96 +81,173 @@ public sealed class ContinuousSpecialReader
             if (canonical.Length < code.Length)
                 canonical = code;
 
-            result.Add((code, canonical));
+            result.Add(new ScreenRow(code, canonical));
         }
 
         return result;
     }
 
-    private static List<(string Code, string Canonical, int Count)> GroupCurrentScreen(
-        IReadOnlyList<(string Code, string Canonical)> rows)
+    private Alignment? FindBestAlignment(IReadOnlyList<ScreenRow> current)
     {
-        var groups = new List<(string Code, string Canonical, int Count)>();
+        Alignment? best = null;
 
-        foreach (var row in rows)
+        // offset: índice global = índice actual + offset.
+        // Un offset negativo significa que la pantalla contiene filas nuevas arriba.
+        for (var offset = -current.Count + 1; offset <= _sequence.Count - 1; offset++)
         {
-            var index = -1;
-            var best = 0.0;
+            var matches = 0;
+            var mismatches = 0;
+            var overlap = 0;
+            double similaritySum = 0;
 
-            for (var i = 0; i < groups.Count; i++)
+            for (var i = 0; i < current.Count; i++)
             {
-                if (!groups[i].Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase)) continue;
-                var similarity = Similarity(groups[i].Canonical, row.Canonical);
-                if (similarity >= 0.94 && similarity > best)
+                var globalIndex = i + offset;
+                if (globalIndex < 0 || globalIndex >= _sequence.Count) continue;
+
+                overlap++;
+                var similarity = RowSimilarity(current[i], _sequence[globalIndex]);
+                if (similarity >= 0.68)
                 {
-                    best = similarity;
-                    index = i;
+                    matches++;
+                    similaritySum += similarity;
+                }
+                else
+                {
+                    mismatches++;
                 }
             }
 
-            if (index < 0)
+            if (overlap == 0 || matches == 0) continue;
+
+            // Para solapes medianos/grandes pedimos al menos dos anclas. Con un solape
+            // de una sola fila permitimos una coincidencia muy fuerte.
+            var average = matches == 0 ? 0 : similaritySum / matches;
+            var acceptable = overlap switch
             {
-                groups.Add((row.Code, row.Canonical, 1));
-            }
-            else
-            {
-                var existing = groups[index];
-                groups[index] = (existing.Code,
-                    row.Canonical.Length > existing.Canonical.Length ? row.Canonical : existing.Canonical,
-                    existing.Count + 1);
-            }
+                1 => matches == 1 && average >= 0.88,
+                2 => matches >= 1 && average >= 0.82,
+                _ => matches >= 2 && matches >= mismatches
+            };
+            if (!acceptable) continue;
+
+            var score = matches * 5.0 - mismatches * 2.5 + average * 2.0 + overlap * 0.05;
+            var candidate = new Alignment(offset, matches, mismatches, overlap, score);
+
+            if (best is null || candidate.Score > best.Score ||
+                (Math.Abs(candidate.Score - best.Score) < 0.001 && candidate.Matches > best.Matches))
+                best = candidate;
         }
 
-        return groups;
+        return best;
     }
 
-    private SeenGroup? FindSeenGroup(string code, string canonical)
+    private void MergeAlignedScreen(IReadOnlyList<ScreenRow> current, int offset)
     {
-        SeenGroup? bestGroup = null;
-        var bestSimilarity = 0.0;
+        var oldCount = _sequence.Count;
 
-        foreach (var seen in _seenGroups)
+        // Filas nuevas por arriba de lo ya conocido.
+        var leadingCount = Math.Min(current.Count, Math.Max(0, -offset));
+        if (leadingCount > 0)
         {
-            if (!seen.Code.Equals(code, StringComparison.OrdinalIgnoreCase)) continue;
-
-            if (seen.Canonical.Equals(canonical, StringComparison.OrdinalIgnoreCase))
-                return seen;
-
-            var similarity = Similarity(seen.Canonical, canonical);
-            var threshold = SimilarityThreshold(seen.Canonical, canonical);
-            if (similarity >= threshold && similarity > bestSimilarity)
-            {
-                bestSimilarity = similarity;
-                bestGroup = seen;
-            }
+            var leading = current.Take(leadingCount)
+                .Select(r => new SeenRow { Code = r.Code, Canonical = r.Canonical })
+                .ToList();
+            _sequence.InsertRange(0, leading);
+            offset += leadingCount;
+            oldCount += leadingCount;
         }
 
-        return bestGroup;
+        // Actualizamos las filas ya alineadas con la lectura más completa, sin sumar.
+        for (var i = 0; i < current.Count; i++)
+        {
+            var globalIndex = i + offset;
+            if (globalIndex < 0 || globalIndex >= _sequence.Count) continue;
+
+            var row = current[i];
+            var seen = _sequence[globalIndex];
+            if (RowSimilarity(row, seen) >= 0.68 && row.Canonical.Length > seen.Canonical.Length)
+                seen.Canonical = row.Canonical;
+        }
+
+        // Filas que extienden la secuencia por abajo: son las únicas que suman al bajar.
+        for (var i = 0; i < current.Count; i++)
+        {
+            var globalIndex = i + offset;
+            if (globalIndex < _sequence.Count) continue;
+
+            _sequence.Add(new SeenRow { Code = current[i].Code, Canonical = current[i].Canonical });
+        }
     }
 
-    private static double SimilarityThreshold(string a, string b)
+    private bool HasAnyStrongGlobalMatch(IReadOnlyList<ScreenRow> current)
     {
-        var minLength = Math.Min(a.Length, b.Length);
-        if (minLength <= 8) return 0.94;
-        if (minLength <= 16) return 0.88;
-        if (minLength <= 28) return 0.84;
-        return 0.80;
+        foreach (var row in current)
+        {
+            foreach (var seen in _sequence)
+            {
+                if (!row.Code.Equals(seen.Code, StringComparison.OrdinalIgnoreCase)) continue;
+                if (RowSimilarity(row, seen) >= 0.84)
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    private static double RowSimilarity(ScreenRow current, SeenRow seen)
+    {
+        if (!current.Code.Equals(seen.Code, StringComparison.OrdinalIgnoreCase))
+            return 0;
+
+        if (current.Canonical.Equals(seen.Canonical, StringComparison.OrdinalIgnoreCase))
+            return 1;
+
+        var charSimilarity = Similarity(current.Canonical, seen.Canonical);
+        var tokenSimilarity = TokenSimilarity(current.Canonical, seen.Canonical);
+
+        // La línea puede variar mucho por OCR durante el scroll. El código del edit ya
+        // coincide; usamos la mejor señal entre texto completo y fragmentos estables.
+        return Math.Max(charSimilarity, tokenSimilarity);
+    }
+
+    private static double TokenSimilarity(string a, string b)
+    {
+        var aTokens = StableTokens(a);
+        var bTokens = StableTokens(b);
+        if (aTokens.Count == 0 || bTokens.Count == 0) return 0;
+
+        var intersection = aTokens.Intersect(bTokens, StringComparer.OrdinalIgnoreCase).Count();
+        if (intersection == 0) return 0;
+
+        var denominator = Math.Min(aTokens.Count, bTokens.Count);
+        return (double)intersection / denominator;
+    }
+
+    private static List<string> StableTokens(string value)
+    {
+        return Regex.Matches(value, @"[A-Z0-9]{4,}")
+            .Select(m => m.Value)
+            .Where(v => v.Length >= 4)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static string Canonicalize(string line)
     {
-        var normalized = line
-            .Replace('Q', '0')
-            .Replace('O', '0')
-            .Replace('I', '1')
-            .Replace('L', '1');
+        // No cambiamos O/I/L globalmente porque eso deformaba nombres de pasajeros y
+        // hacía que la misma fila pareciera distinta al volver a subir.
+        var normalized = line;
+        normalized = Regex.Replace(normalized, @"(?<=\d)[OQ](?=\d)", "0");
+        normalized = Regex.Replace(normalized, @"(?<=\d)[IL](?=\d)", "1");
 
         var builder = new StringBuilder(normalized.Length);
         foreach (var ch in normalized)
         {
             if (char.IsLetterOrDigit(ch)) builder.Append(ch);
+            else builder.Append(' ');
         }
-        return builder.ToString();
+
+        return Regex.Replace(builder.ToString(), @"\s+", " ").Trim();
     }
 
     private static double Similarity(string a, string b)
@@ -207,11 +283,8 @@ public sealed class ContinuousSpecialReader
     private SpecialCounts BuildCounts()
     {
         var result = new SpecialCounts();
-        foreach (var group in _seenGroups)
-        {
-            for (var i = 0; i < group.MaxOccurrences; i++)
-                AddCount(result, group.Code);
-        }
+        foreach (var row in _sequence)
+            AddCount(result, row.Code);
         return result;
     }
 
@@ -239,8 +312,8 @@ public sealed class ContinuousSpecialReader
             case "DEPA": result.DEPA++; break;
             case "DEPU": result.DEPU++; break;
             default:
-                result.Extra.TryGetValue(code, out var current);
-                result.Extra[code] = current + 1;
+                result.Extra.TryGetValue(code, out var count);
+                result.Extra[code] = count + 1;
                 break;
         }
     }
