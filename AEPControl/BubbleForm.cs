@@ -23,7 +23,7 @@ public sealed class BubbleForm : Form
         StartPosition = FormStartPosition.Manual;
         TopMost = true;
         ShowInTaskbar = false;
-        Size = new Size(250, 116);
+        Size = new Size(270, 132);
         BackColor = Color.FromArgb(35, 35, 42);
         ForeColor = Color.White;
         Opacity = 0.94;
@@ -34,23 +34,23 @@ public sealed class BubbleForm : Form
 
         _flight.Font = new Font("Segoe UI", 14, FontStyle.Bold);
         _flight.Location = new Point(18, 10);
-        _flight.Size = new Size(145, 28);
+        _flight.Size = new Size(155, 28);
         _flight.Text = flight;
 
         _state.Font = new Font("Segoe UI", 9, FontStyle.Bold);
-        _state.Location = new Point(165, 15);
-        _state.Size = new Size(70, 20);
+        _state.Location = new Point(175, 15);
+        _state.Size = new Size(78, 20);
         _state.Text = "● Leyendo";
         _state.ForeColor = Color.LightGreen;
 
         _counts.Font = new Font("Segoe UI", 9);
         _counts.Location = new Point(18, 42);
-        _counts.Size = new Size(214, 34);
+        _counts.Size = new Size(234, 50);
         _counts.Text = mode switch
         {
             BubbleMode.FlightList => "Vuelos únicos: 0\nHacé scroll lentamente",
             BubbleMode.PassengerDocuments => "Documentos únicos: 0\nOCR continuo · pasada 0",
-            _ => "WCHR 0 · WCHS 0 · WCHC 0\nAVIH 0 · INF 0"
+            _ => "WCHR 0 · WCHS 0 · WCHC 0\nAVIH 0 · INF 0\nOtros 0 · filas 0"
         };
 
         _finish.Text = mode switch
@@ -59,8 +59,8 @@ public sealed class BubbleForm : Form
             BubbleMode.PassengerDocuments => "Finalizar documentación",
             _ => "Finalizar y seguir"
         };
-        _finish.Location = new Point(18, 80);
-        _finish.Size = new Size(214, 27);
+        _finish.Location = new Point(18, 96);
+        _finish.Size = new Size(234, 27);
         _finish.Click += (_, _) => FinishRequested?.Invoke(this, EventArgs.Empty);
 
         Controls.AddRange(new Control[] { _flight, _state, _counts, _finish });
@@ -83,8 +83,11 @@ public sealed class BubbleForm : Form
             return;
         }
 
+        var others = flight.UMNR + flight.PETC + flight.DEAF + flight.BLND + flight.MAAS + flight.STCR + flight.MEDA
+            + flight.WCLBD + flight.WCMP + flight.SVAN + flight.ESAN + flight.INAD + flight.DEPA + flight.DEPU;
+
         _flight.Text = flight.Vuelo;
-        _counts.Text = $"WCHR {flight.WCHR} · WCHS {flight.WCHS} · WCHC {flight.WCHC}\nAVIH {flight.AVIH} · INF {flight.INF} · filas {uniqueRows}";
+        _counts.Text = $"WCHR {flight.WCHR} · WCHS {flight.WCHS} · WCHC {flight.WCHC}\nAVIH {flight.AVIH} · INF {flight.INF}\nOtros {others} · filas {uniqueRows}";
     }
 
     public void UpdateFlightCount(int count)
