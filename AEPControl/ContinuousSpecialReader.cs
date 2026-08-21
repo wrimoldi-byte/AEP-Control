@@ -9,6 +9,7 @@ public sealed class ContinuousSpecialReader
     {
         public string Code { get; init; } = string.Empty;
         public string Seat { get; init; } = string.Empty;
+        public string Passenger { get; init; } = string.Empty;
         public string Canonical { get; set; } = string.Empty;
     }
 
@@ -16,15 +17,24 @@ public sealed class ContinuousSpecialReader
     {
         public string Code { get; init; } = string.Empty;
         public string Seat { get; init; } = string.Empty;
+        public string Passenger { get; init; } = string.Empty;
         public string Canonical { get; set; } = string.Empty;
         public int ConsecutiveHits { get; set; }
         public int LastFrame { get; set; }
     }
 
-    private sealed record ScreenRow(string Code, string Seat, string Canonical);
+    private sealed record ScreenRow(string Code, string Seat, string Passenger, string Canonical);
 
     private readonly Regex _codeRegex;
     private static readonly Regex SeatRegex = new(@"\b(?<seat>\d{1,2}[A-F])\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SlashNameRegex = new(@"\b(?<last>[A-Z]{2,})\s*/\s*(?<first>[A-Z]{2,})(?:\s+(?<extra>[A-Z]{2,}))?\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly HashSet<string> IgnoredNameTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "SSR", "EDIT", "EDITS", "SUSEDIT", "SEAT", "ASIENTO", "PAX", "PASSENGER",
+        "HK", "HK1", "HN", "HN1", "NN", "NN1", "UC", "NO", "YES", "OSI", "DOCS",
+        "MR", "MRS", "MISS", "MS", "CHD", "ADT", "INFANT", "BABY"
+    };
 
     private readonly List<ConfirmedRow> _confirmed = new();
     private readonly List<PendingRow> _pending = new();
@@ -54,10 +64,7 @@ public sealed class ContinuousSpecialReader
         foreach (var row in current)
             AddCandidate(row);
 
-        // Si una fila no reaparece pronto, se descarta. Ninguna lectura aislada
-        // puede convertirse por sí sola en un WCHR/INF/etc confirmado.
         _pending.RemoveAll(p => _frame - p.LastFrame > 2);
-
         return BuildCounts();
     }
 
@@ -76,16 +83,56 @@ public sealed class ContinuousSpecialReader
             var seatMatch = SeatRegex.Match(line);
             var seat = seatMatch.Success ? NormalizeSeat(seatMatch.Groups["seat"].Value) : string.Empty;
             var canonical = Canonicalize(line);
+            var passenger = ExtractPassengerKey(line, codeMatches.Select(m => m.Value));
 
             foreach (var code in codeMatches
                 .Select(m => m.Value.ToUpperInvariant())
                 .Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                result.Add(new ScreenRow(code, seat, canonical));
+                result.Add(new ScreenRow(code, seat, passenger, canonical));
             }
         }
 
         return result;
+    }
+
+    private static string ExtractPassengerKey(string line, IEnumerable<string> codes)
+    {
+        var slash = SlashNameRegex.Match(line);
+        if (slash.Success)
+        {
+            var last = slash.Groups["last"].Value;
+            var first = slash.Groups["first"].Value;
+            return NormalizePassenger($"{last}/{first}");
+        }
+
+        var codeSet = codes.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var tokens = Regex.Matches(line, @"\b[A-Z]{3,}\b")
+            .Select(m => m.Value.ToUpperInvariant())
+            .Where(t => !codeSet.Contains(t))
+            .Where(t => !IgnoredNameTokens.Contains(t))
+            .Where(t => !Regex.IsMatch(t, @"^[A-Z]{1,2}\d+$"))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Sin formato APELLIDO/NOMBRE usamos dos tokens alfabéticos estables.
+        // Uno solo es demasiado ambiguo y no se usa como identidad fuerte.
+        if (tokens.Count >= 2)
+            return NormalizePassenger(tokens[0] + "/" + tokens[1]);
+
+        return string.Empty;
+    }
+
+    private static string NormalizePassenger(string value)
+    {
+        var upper = value.ToUpperInvariant();
+        var builder = new StringBuilder(upper.Length);
+        foreach (var ch in upper)
+        {
+            if (char.IsLetter(ch) || ch == '/')
+                builder.Append(ch);
+        }
+        return builder.ToString();
     }
 
     private static List<ScreenRow> DeduplicateCurrentScreen(List<ScreenRow> rows)
@@ -94,10 +141,11 @@ public sealed class ContinuousSpecialReader
 
         foreach (var row in rows)
         {
-            var duplicate = result.Any(r =>
-                r.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
-                SeatsEquivalent(r.Seat, row.Seat) &&
-                CanonicalSimilarity(r.Canonical, row.Canonical) >= 0.88);
+            var duplicate = result.Any(r => SameIdentity(r, row) ||
+                (r.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
+                 string.IsNullOrWhiteSpace(r.Seat) && string.IsNullOrWhiteSpace(row.Seat) &&
+                 string.IsNullOrWhiteSpace(r.Passenger) && string.IsNullOrWhiteSpace(row.Passenger) &&
+                 CanonicalSimilarity(r.Canonical, row.Canonical) >= 0.90));
 
             if (!duplicate)
                 result.Add(row);
@@ -106,54 +154,64 @@ public sealed class ContinuousSpecialReader
         return result;
     }
 
+    private static bool SameIdentity(ScreenRow a, ScreenRow b)
+    {
+        if (!a.Code.Equals(b.Code, StringComparison.OrdinalIgnoreCase)) return false;
+
+        if (!string.IsNullOrWhiteSpace(a.Seat) && !string.IsNullOrWhiteSpace(b.Seat))
+            return a.Seat.Equals(b.Seat, StringComparison.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(a.Passenger) && !string.IsNullOrWhiteSpace(b.Passenger))
+            return PassengerEquivalent(a.Passenger, b.Passenger);
+
+        return false;
+    }
+
     private void AddCandidate(ScreenRow row)
     {
-        // 1) Ya confirmado exactamente por código + asiento.
+        // Identidad fuerte 1: EDIT + asiento.
         if (!string.IsNullOrWhiteSpace(row.Seat))
         {
-            var exact = _confirmed.FirstOrDefault(c =>
+            var exactSeat = _confirmed.FirstOrDefault(c =>
                 c.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
                 c.Seat.Equals(row.Seat, StringComparison.OrdinalIgnoreCase));
-
-            if (exact is not null)
+            if (exactSeat is not null)
             {
-                if (row.Canonical.Length > exact.Canonical.Length)
-                    exact.Canonical = row.Canonical;
+                UpdateCanonical(exactSeat, row.Canonical);
                 return;
             }
         }
 
-        // 2) La misma fila puede perder el asiento en una captura por OCR.
-        // Si el texto coincide con una fila ya confirmada del mismo EDIT, no se suma otra vez.
+        // Identidad fuerte 2: EDIT + pasajero. Esto cubre pasajeros SIN asiento
+        // y también evita duplicarlos si el asiento desaparece/cambia por error de OCR.
+        if (!string.IsNullOrWhiteSpace(row.Passenger))
+        {
+            var exactPassenger = _confirmed.FirstOrDefault(c =>
+                c.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(c.Passenger) &&
+                PassengerEquivalent(c.Passenger, row.Passenger));
+            if (exactPassenger is not null)
+            {
+                UpdateCanonical(exactPassenger, row.Canonical);
+                return;
+            }
+        }
+
+        // Respaldo: misma fila textual del mismo EDIT ya confirmada.
         var sameConfirmedRow = _confirmed.Any(c =>
             c.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
-            CanonicalSimilarity(c.Canonical, row.Canonical) >= 0.78);
+            CanonicalSimilarity(c.Canonical, row.Canonical) >= 0.82);
         if (sameConfirmedRow)
             return;
 
-        // 3) Buscar candidato pendiente. Con asiento exigimos mismo asiento;
-        // sin asiento usamos similitud textual fuerte.
-        PendingRow? pending;
-        if (!string.IsNullOrWhiteSpace(row.Seat))
-        {
-            pending = _pending.FirstOrDefault(p =>
-                p.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
-                p.Seat.Equals(row.Seat, StringComparison.OrdinalIgnoreCase));
-        }
-        else
-        {
-            pending = _pending
-                .Where(p => p.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(p.Seat))
-                .OrderByDescending(p => CanonicalSimilarity(p.Canonical, row.Canonical))
-                .FirstOrDefault(p => CanonicalSimilarity(p.Canonical, row.Canonical) >= 0.86);
-        }
-
+        var pending = FindPending(row);
         if (pending is null)
         {
             _pending.Add(new PendingRow
             {
                 Code = row.Code,
                 Seat = row.Seat,
+                Passenger = row.Passenger,
                 Canonical = row.Canonical,
                 ConsecutiveHits = 1,
                 LastFrame = _frame
@@ -164,24 +222,19 @@ public sealed class ContinuousSpecialReader
         if (pending.LastFrame == _frame)
             return;
 
-        pending.ConsecutiveHits = pending.LastFrame == _frame - 1
-            ? pending.ConsecutiveHits + 1
-            : 1;
+        pending.ConsecutiveHits = pending.LastFrame == _frame - 1 ? pending.ConsecutiveHits + 1 : 1;
         pending.LastFrame = _frame;
-
         if (row.Canonical.Length > pending.Canonical.Length)
             pending.Canonical = row.Canonical;
 
-        // Tanto con asiento como sin asiento debe verse estable al menos dos veces.
         if (pending.ConsecutiveHits < 2)
             return;
 
-        // Antes de confirmar, una última comparación global evita que una lectura
-        // 12A -> sin asiento -> 12A genere dos pasajeros durante el scroll.
         var duplicateConfirmed = _confirmed.Any(c =>
             c.Code.Equals(pending.Code, StringComparison.OrdinalIgnoreCase) &&
             ((!string.IsNullOrWhiteSpace(pending.Seat) && c.Seat.Equals(pending.Seat, StringComparison.OrdinalIgnoreCase)) ||
-             CanonicalSimilarity(c.Canonical, pending.Canonical) >= 0.78));
+             (!string.IsNullOrWhiteSpace(pending.Passenger) && !string.IsNullOrWhiteSpace(c.Passenger) && PassengerEquivalent(c.Passenger, pending.Passenger)) ||
+             CanonicalSimilarity(c.Canonical, pending.Canonical) >= 0.82));
 
         if (!duplicateConfirmed)
         {
@@ -189,6 +242,7 @@ public sealed class ContinuousSpecialReader
             {
                 Code = pending.Code,
                 Seat = pending.Seat,
+                Passenger = pending.Passenger,
                 Canonical = pending.Canonical
             });
         }
@@ -196,11 +250,42 @@ public sealed class ContinuousSpecialReader
         _pending.Remove(pending);
     }
 
-    private static bool SeatsEquivalent(string a, string b)
+    private PendingRow? FindPending(ScreenRow row)
     {
-        if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b))
-            return string.IsNullOrWhiteSpace(a) && string.IsNullOrWhiteSpace(b);
-        return a.Equals(b, StringComparison.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(row.Seat))
+        {
+            var bySeat = _pending.FirstOrDefault(p =>
+                p.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
+                p.Seat.Equals(row.Seat, StringComparison.OrdinalIgnoreCase));
+            if (bySeat is not null) return bySeat;
+        }
+
+        if (!string.IsNullOrWhiteSpace(row.Passenger))
+        {
+            var byPassenger = _pending.FirstOrDefault(p =>
+                p.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(p.Passenger) &&
+                PassengerEquivalent(p.Passenger, row.Passenger));
+            if (byPassenger is not null) return byPassenger;
+        }
+
+        return _pending
+            .Where(p => p.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(p => CanonicalSimilarity(p.Canonical, row.Canonical))
+            .FirstOrDefault(p => CanonicalSimilarity(p.Canonical, row.Canonical) >= 0.88);
+    }
+
+    private static void UpdateCanonical(ConfirmedRow row, string canonical)
+    {
+        if (canonical.Length > row.Canonical.Length)
+            row.Canonical = canonical;
+    }
+
+    private static bool PassengerEquivalent(string a, string b)
+    {
+        if (a.Equals(b, StringComparison.OrdinalIgnoreCase)) return true;
+        if (a.Length < 6 || b.Length < 6) return false;
+        return Similarity(a, b) >= 0.88;
     }
 
     private static string NormalizeSeat(string value)
@@ -219,12 +304,8 @@ public sealed class ContinuousSpecialReader
 
     private static double CanonicalSimilarity(string a, string b)
     {
-        if (a.Equals(b, StringComparison.OrdinalIgnoreCase))
-            return 1;
-
-        var charSimilarity = Similarity(a, b);
-        var tokenSimilarity = TokenSimilarity(a, b);
-        return Math.Max(charSimilarity, tokenSimilarity);
+        if (a.Equals(b, StringComparison.OrdinalIgnoreCase)) return 1;
+        return Math.Max(Similarity(a, b), TokenSimilarity(a, b));
     }
 
     private static double TokenSimilarity(string a, string b)
@@ -235,9 +316,7 @@ public sealed class ContinuousSpecialReader
 
         var intersection = aTokens.Intersect(bTokens, StringComparer.OrdinalIgnoreCase).Count();
         if (intersection == 0) return 0;
-
-        var denominator = Math.Max(aTokens.Count, bTokens.Count);
-        return (double)intersection / denominator;
+        return (double)intersection / Math.Max(aTokens.Count, bTokens.Count);
     }
 
     private static List<string> StableTokens(string value)
@@ -251,16 +330,12 @@ public sealed class ContinuousSpecialReader
 
     private static string Canonicalize(string line)
     {
-        var normalized = line;
-        normalized = Regex.Replace(normalized, @"(?<=\d)[OQ](?=\d)", "0");
+        var normalized = Regex.Replace(line, @"(?<=\d)[OQ](?=\d)", "0");
         normalized = Regex.Replace(normalized, @"(?<=\d)[IL](?=\d)", "1");
 
         var builder = new StringBuilder(normalized.Length);
         foreach (var ch in normalized)
-        {
-            if (char.IsLetterOrDigit(ch)) builder.Append(ch);
-            else builder.Append(' ');
-        }
+            builder.Append(char.IsLetterOrDigit(ch) ? ch : ' ');
 
         return Regex.Replace(builder.ToString(), @"\s+", " ").Trim();
     }
@@ -285,9 +360,7 @@ public sealed class ContinuousSpecialReader
             for (var j = 1; j <= b.Length; j++)
             {
                 var cost = a[i - 1] == b[j - 1] ? 0 : 1;
-                current[j] = Math.Min(
-                    Math.Min(current[j - 1] + 1, previous[j] + 1),
-                    previous[j - 1] + cost);
+                current[j] = Math.Min(Math.Min(current[j - 1] + 1, previous[j] + 1), previous[j - 1] + cost);
             }
             (previous, current) = (current, previous);
         }
