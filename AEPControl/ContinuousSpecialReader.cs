@@ -15,6 +15,7 @@ public sealed class ContinuousSpecialReader
     private sealed class PendingRow
     {
         public string Code { get; init; } = string.Empty;
+        public string Seat { get; init; } = string.Empty;
         public string Canonical { get; set; } = string.Empty;
         public int ConsecutiveHits { get; set; }
         public int LastFrame { get; set; }
@@ -26,7 +27,7 @@ public sealed class ContinuousSpecialReader
     private static readonly Regex SeatRegex = new(@"\b(?<seat>\d{1,2}[A-F])\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private readonly List<ConfirmedRow> _confirmed = new();
-    private readonly List<PendingRow> _pendingNoSeat = new();
+    private readonly List<PendingRow> _pending = new();
     private int _frame;
 
     public int UniqueRows => _confirmed.Count;
@@ -48,24 +49,14 @@ public sealed class ContinuousSpecialReader
         if (current.Count == 0)
             return BuildCounts();
 
-        // Eliminamos repeticiones dentro de la misma captura antes de tocar el acumulado.
         current = DeduplicateCurrentScreen(current);
 
         foreach (var row in current)
-        {
-            if (!string.IsNullOrWhiteSpace(row.Seat))
-            {
-                AddSeatRow(row);
-                continue;
-            }
+            AddCandidate(row);
 
-            AddNoSeatRow(row);
-        }
-
-        // Un candidato sin asiento debe reaparecer en capturas consecutivas.
-        // Si desaparece durante varios frames, se descarta para que un error aislado de OCR
-        // no se transforme en un pasajero/edit nuevo.
-        _pendingNoSeat.RemoveAll(p => _frame - p.LastFrame > 2);
+        // Si una fila no reaparece pronto, se descarta. Ninguna lectura aislada
+        // puede convertirse por sí sola en un WCHR/INF/etc confirmado.
+        _pending.RemoveAll(p => _frame - p.LastFrame > 2);
 
         return BuildCounts();
     }
@@ -103,21 +94,10 @@ public sealed class ContinuousSpecialReader
 
         foreach (var row in rows)
         {
-            if (!string.IsNullOrWhiteSpace(row.Seat))
-            {
-                if (result.Any(r =>
-                    r.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
-                    r.Seat.Equals(row.Seat, StringComparison.OrdinalIgnoreCase)))
-                    continue;
-
-                result.Add(row);
-                continue;
-            }
-
             var duplicate = result.Any(r =>
-                string.IsNullOrWhiteSpace(r.Seat) &&
                 r.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
-                CanonicalSimilarity(r.Canonical, row.Canonical) >= 0.90);
+                SeatsEquivalent(r.Seat, row.Seat) &&
+                CanonicalSimilarity(r.Canonical, row.Canonical) >= 0.88);
 
             if (!duplicate)
                 result.Add(row);
@@ -126,48 +106,54 @@ public sealed class ContinuousSpecialReader
         return result;
     }
 
-    private void AddSeatRow(ScreenRow row)
+    private void AddCandidate(ScreenRow row)
     {
-        var existing = _confirmed.FirstOrDefault(seen =>
-            seen.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
-            seen.Seat.Equals(row.Seat, StringComparison.OrdinalIgnoreCase));
-
-        if (existing is not null)
+        // 1) Ya confirmado exactamente por código + asiento.
+        if (!string.IsNullOrWhiteSpace(row.Seat))
         {
-            if (row.Canonical.Length > existing.Canonical.Length)
-                existing.Canonical = row.Canonical;
-            return;
+            var exact = _confirmed.FirstOrDefault(c =>
+                c.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
+                c.Seat.Equals(row.Seat, StringComparison.OrdinalIgnoreCase));
+
+            if (exact is not null)
+            {
+                if (row.Canonical.Length > exact.Canonical.Length)
+                    exact.Canonical = row.Canonical;
+                return;
+            }
         }
 
-        _confirmed.Add(new ConfirmedRow
-        {
-            Code = row.Code,
-            Seat = row.Seat,
-            Canonical = row.Canonical
-        });
-    }
-
-    private void AddNoSeatRow(ScreenRow row)
-    {
-        // Primero comparamos contra TODO lo ya confirmado del vuelo, no sólo contra la
-        // pantalla previa ni contra la misma posición visual.
-        var confirmedMatch = _confirmed.Any(seen =>
-            seen.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
-            CanonicalSimilarity(seen.Canonical, row.Canonical) >= 0.84);
-
-        if (confirmedMatch)
+        // 2) La misma fila puede perder el asiento en una captura por OCR.
+        // Si el texto coincide con una fila ya confirmada del mismo EDIT, no se suma otra vez.
+        var sameConfirmedRow = _confirmed.Any(c =>
+            c.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
+            CanonicalSimilarity(c.Canonical, row.Canonical) >= 0.78);
+        if (sameConfirmedRow)
             return;
 
-        var pending = _pendingNoSeat
-            .Where(p => p.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(p => CanonicalSimilarity(p.Canonical, row.Canonical))
-            .FirstOrDefault(p => CanonicalSimilarity(p.Canonical, row.Canonical) >= 0.82);
+        // 3) Buscar candidato pendiente. Con asiento exigimos mismo asiento;
+        // sin asiento usamos similitud textual fuerte.
+        PendingRow? pending;
+        if (!string.IsNullOrWhiteSpace(row.Seat))
+        {
+            pending = _pending.FirstOrDefault(p =>
+                p.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
+                p.Seat.Equals(row.Seat, StringComparison.OrdinalIgnoreCase));
+        }
+        else
+        {
+            pending = _pending
+                .Where(p => p.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(p.Seat))
+                .OrderByDescending(p => CanonicalSimilarity(p.Canonical, row.Canonical))
+                .FirstOrDefault(p => CanonicalSimilarity(p.Canonical, row.Canonical) >= 0.86);
+        }
 
         if (pending is null)
         {
-            _pendingNoSeat.Add(new PendingRow
+            _pending.Add(new PendingRow
             {
                 Code = row.Code,
+                Seat = row.Seat,
                 Canonical = row.Canonical,
                 ConsecutiveHits = 1,
                 LastFrame = _frame
@@ -186,16 +172,35 @@ public sealed class ContinuousSpecialReader
         if (row.Canonical.Length > pending.Canonical.Length)
             pending.Canonical = row.Canonical;
 
+        // Tanto con asiento como sin asiento debe verse estable al menos dos veces.
         if (pending.ConsecutiveHits < 2)
             return;
 
-        _confirmed.Add(new ConfirmedRow
+        // Antes de confirmar, una última comparación global evita que una lectura
+        // 12A -> sin asiento -> 12A genere dos pasajeros durante el scroll.
+        var duplicateConfirmed = _confirmed.Any(c =>
+            c.Code.Equals(pending.Code, StringComparison.OrdinalIgnoreCase) &&
+            ((!string.IsNullOrWhiteSpace(pending.Seat) && c.Seat.Equals(pending.Seat, StringComparison.OrdinalIgnoreCase)) ||
+             CanonicalSimilarity(c.Canonical, pending.Canonical) >= 0.78));
+
+        if (!duplicateConfirmed)
         {
-            Code = pending.Code,
-            Seat = string.Empty,
-            Canonical = pending.Canonical
-        });
-        _pendingNoSeat.Remove(pending);
+            _confirmed.Add(new ConfirmedRow
+            {
+                Code = pending.Code,
+                Seat = pending.Seat,
+                Canonical = pending.Canonical
+            });
+        }
+
+        _pending.Remove(pending);
+    }
+
+    private static bool SeatsEquivalent(string a, string b)
+    {
+        if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b))
+            return string.IsNullOrWhiteSpace(a) && string.IsNullOrWhiteSpace(b);
+        return a.Equals(b, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string NormalizeSeat(string value)
