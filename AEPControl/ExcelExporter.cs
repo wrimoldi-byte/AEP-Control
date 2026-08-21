@@ -36,11 +36,11 @@ public static class ExcelExporter
     {
         var entry = archive.CreateEntry("xl/worksheets/sheet1.xml", CompressionLevel.Optimal);
         using var stream = entry.Open();
-        var settings = new XmlWriterSettings { Encoding = new UTF8Encoding(false), Indent = false };
-        using var xw = XmlWriter.Create(stream, settings);
+        using var xw = XmlWriter.Create(stream, new XmlWriterSettings { Encoding = new UTF8Encoding(false), Indent = false });
 
         xw.WriteStartDocument(true);
         xw.WriteStartElement("worksheet", SpreadsheetNs);
+
         xw.WriteStartElement("sheetViews", SpreadsheetNs);
         xw.WriteStartElement("sheetView", SpreadsheetNs);
         xw.WriteAttributeString("workbookViewId", "0");
@@ -48,25 +48,23 @@ public static class ExcelExporter
         xw.WriteEndElement();
 
         xw.WriteStartElement("cols", SpreadsheetNs);
-        WriteCol(xw, 1, 1, 14);   // Arribo
-        WriteCol(xw, 2, 2, 12);   // Tipo avion
-        WriteCol(xw, 3, 4, 11);   // ETA/PAX
-        WriteCol(xw, 5, 5, 25);   // Especial llegada
-        WriteCol(xw, 6, 6, 14);   // Salida
-        WriteCol(xw, 7, 7, 11);   // ETD
-        WriteCol(xw, 8, 13, 12);  // Matricula..INF
-        WriteCol(xw, 14, 14, 27); // Especial salida
-        WriteCol(xw, 15, 18, 11); // PALL..ETO
+        WriteCol(xw, 1, 1, 15);
+        WriteCol(xw, 2, 2, 12);
+        WriteCol(xw, 3, 4, 11);
+        WriteCol(xw, 5, 5, 42);
+        WriteCol(xw, 6, 6, 15);
+        WriteCol(xw, 7, 7, 11);
+        WriteCol(xw, 8, 13, 12);
+        WriteCol(xw, 14, 14, 42);
+        WriteCol(xw, 15, 18, 11);
         xw.WriteEndElement();
 
         xw.WriteStartElement("sheetData", SpreadsheetNs);
 
-        // Título
         WriteRowStart(xw, 1, 26);
         WriteCell(xw, "A1", DateTime.Now.ToString("dd/MM/yyyy") + " - AEP CONTROL", 3);
         WriteRowEnd(xw);
 
-        // Encabezados principales similares al modelo operativo.
         WriteRowStart(xw, 2, 34);
         string[] headers =
         {
@@ -82,7 +80,7 @@ public static class ExcelExporter
         for (var i = 0; i < rows; i++)
         {
             var row = i + 3;
-            WriteRowStart(xw, row, 38);
+            WriteRowStart(xw, row, 42);
 
             if (i < arrivals.Count)
             {
@@ -90,7 +88,7 @@ public static class ExcelExporter
                 WriteCell(xw, $"A{row}", FlightLabel(f), 4);
                 WriteCellIfValue(xw, $"B{row}", f.Equipo, 1);
                 WriteCellIfValue(xw, $"C{row}", f.Hora, 1);
-                WriteNumberIfKnown(xw, $"D{row}", f.Total, f.Premium != 0 || f.Economy != 0, 1);
+                WriteNumberIfKnown(xw, $"D{row}", f.Total, f.BookingKnown, 1);
                 WriteCellIfValue(xw, $"E{row}", SpecialText(f), 1);
             }
 
@@ -99,26 +97,25 @@ public static class ExcelExporter
                 var f = departures[i];
                 WriteCell(xw, $"F{row}", FlightLabel(f), 4);
                 WriteCellIfValue(xw, $"G{row}", f.Hora, 1);
-                // H, I, J quedan vacías: matrícula, ABE, CONF no se leen todavía.
-                WriteNumberIfKnown(xw, $"K{row}", f.Total, f.Premium != 0 || f.Economy != 0, 1);
-                // L SVCS: sin dato general todavía.
+                // H/I/J quedan disponibles para MATRÍCULA, ABE y CONF cuando incorporemos esas lecturas.
+                WriteNumberIfKnown(xw, $"K{row}", f.Total, f.BookingKnown, 1);
+                // L (SVCS) queda disponible para la lectura general de servicios.
                 WriteNumberIfKnown(xw, $"M{row}", f.INF, f.EspecialesLeidos, 1);
                 WriteCellIfValue(xw, $"N{row}", SpecialText(f, excludeInf: true), 1);
-                // O:R quedan vacías: PALL E, PALL UPG, GPR +10, ETO.
+                // O:R quedan disponibles para PALL E, PALL UPG, GPR +10 y ETO.
             }
 
             WriteRowEnd(xw);
         }
 
-        // Una línea vacía con borde si no hay vuelos, para conservar el formato visual.
         if (rows == 0)
         {
-            WriteRowStart(xw, 3, 38);
+            WriteRowStart(xw, 3, 42);
             for (var c = 1; c <= 18; c++) WriteBlankCell(xw, ColumnName(c) + "3", 1);
             WriteRowEnd(xw);
         }
 
-        xw.WriteEndElement(); // sheetData
+        xw.WriteEndElement();
 
         xw.WriteStartElement("mergeCells", SpreadsheetNs);
         xw.WriteAttributeString("count", "1");
@@ -146,18 +143,47 @@ public static class ExcelExporter
     private static string SpecialText(FlightData f, bool excludeInf = false)
     {
         if (!f.EspecialesLeidos) return string.Empty;
+
         var parts = new List<string>();
-        if (f.WCHR > 0) parts.Add($"WCHR {f.WCHR}");
-        if (f.WCHS > 0) parts.Add($"WCHS {f.WCHS}");
-        if (f.WCHC > 0) parts.Add($"WCHC {f.WCHC}");
-        if (f.AVIH > 0) parts.Add($"AVIH {f.AVIH}");
-        if (!excludeInf && f.INF > 0) parts.Add($"INF {f.INF}");
+        Add(parts, "WCHR", f.WCHR);
+        Add(parts, "WCHS", f.WCHS);
+        Add(parts, "WCHC", f.WCHC);
+        Add(parts, "AVIH", f.AVIH);
+        if (!excludeInf) Add(parts, "INF", f.INF);
+        Add(parts, "UMNR", f.UMNR);
+        Add(parts, "PETC", f.PETC);
+        Add(parts, "DEAF", f.DEAF);
+        Add(parts, "BLND", f.BLND);
+        Add(parts, "MAAS", f.MAAS);
+        Add(parts, "STCR", f.STCR);
+        Add(parts, "MEDA", f.MEDA);
+        Add(parts, "WCLB", f.WCLB);
+        Add(parts, "WCMP", f.WCMP);
+        Add(parts, "SVAN", f.SVAN);
+        Add(parts, "ESAN", f.ESAN);
+        Add(parts, "INAD", f.INAD);
+        Add(parts, "DEPA", f.DEPA);
+        Add(parts, "DEPU", f.DEPU);
+
+        foreach (var item in f.ExtraSpecialCounts.OrderBy(x => x.Key))
+        {
+            if (excludeInf && item.Key.Equals("INF", StringComparison.OrdinalIgnoreCase)) continue;
+            Add(parts, item.Key, item.Value);
+        }
+
         return string.Join(" / ", parts);
+    }
+
+    private static void Add(List<string> parts, string code, int value)
+    {
+        if (value > 0) parts.Add($"{code} {value}");
     }
 
     private static int SortTime(string value)
     {
         if (TimeSpan.TryParse(value, out var time)) return (int)time.TotalMinutes;
+        if (value.Length == 4 && int.TryParse(value, out var hhmm))
+            return (hhmm / 100) * 60 + hhmm % 100;
         return int.MaxValue;
     }
 
