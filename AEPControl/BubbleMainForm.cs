@@ -20,7 +20,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v2.6";
+        Text = "AEP Control v2.13";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1280, 720);
         TopMost = true;
@@ -108,12 +108,12 @@ public sealed class BubbleMainForm : Form
 
     private async Task ActAsync()
     {
-        if (_stage == 0) await ScanFlightsAsync("Llegada", 1);
-        else if (_stage == 1 || _stage == 3) await StartBubbleAsync();
-        else if (_stage == 2) await ScanFlightsAsync("Salida", 3);
+        if (_stage == 0) await ScanFlightsAsync("Llegada");
+        else if (_stage == 1) await ScanFlightsAsync("Salida");
+        else if (_stage == 2) await StartBubbleAsync();
     }
 
-    private async Task ScanFlightsAsync(string movement, int nextStage)
+    private async Task ScanFlightsAsync(string movement)
     {
         Hide();
         await Task.Delay(250);
@@ -200,21 +200,48 @@ public sealed class BubbleMainForm : Form
             return;
         }
 
-        _batch.Clear();
         foreach (var flight in unique.Values.OrderBy(x => x.Hora).ThenBy(x => x.Vuelo))
-        {
             _flights.Add(flight);
+
+        _export.Enabled = _flights.Count > 0;
+
+        if (movement.Equals("Llegada", StringComparison.OrdinalIgnoreCase))
+        {
+            _stage = 1;
+            _title.Text = "Paso 2 — Vuelos de salida";
+            _help.Text = "Llegadas guardadas. Abrí ahora la grilla de salidas y hacé la misma lectura: Vuelo, Destino, Hora y Booking.";
+            _action.Text = "Iniciar lectura de salidas";
+            _status.Text = $"Llegadas guardadas: {unique.Count} vuelos. Ahora leemos salidas.";
+            return;
+        }
+
+        BuildSpecialBatch();
+    }
+
+    private void BuildSpecialBatch()
+    {
+        _batch.Clear();
+        foreach (var flight in _flights
+            .OrderBy(f => f.Movimiento.Equals("Llegada", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(f => f.Hora)
+            .ThenBy(f => f.Vuelo))
+        {
             _batch.Add(flight);
         }
 
-        _export.Enabled = _flights.Count > 0;
-        _stage = nextStage;
+        if (_batch.Count == 0)
+        {
+            _status.Text = "No hay vuelos para leer especiales.";
+            return;
+        }
+
+        _stage = 2;
         _index = 0;
         _chooseStartFromSelection = true;
-        _title.Text = $"{movement}s — elegí desde qué vuelo comenzar";
-        _help.Text = "Seleccioná en la tabla el vuelo desde el que querés empezar a leer especiales. Después tocá Iniciar. Desde ahí continuará automáticamente hacia abajo.";
+        _title.Text = "Paso 3 — Especiales de llegadas y salidas";
+        _help.Text = "Ya están cargadas llegadas y salidas. Seleccioná desde qué vuelo querés comenzar; se leerán los mismos EDITS para ambos tipos de vuelo.";
         _action.Text = "Iniciar especiales desde vuelo seleccionado";
-        _status.Text = $"Lista terminada: {_batch.Count} vuelos únicos. Elegí una fila para comenzar.";
+        _status.Text = $"Listas completas: {_flights.Count(f => f.Movimiento == "Llegada")} llegadas + {_flights.Count(f => f.Movimiento == "Salida")} salidas.";
     }
 
     private void PrepareFlight()
@@ -326,22 +353,11 @@ public sealed class BubbleMainForm : Form
         }
 
         Show(); Activate();
-        if (_stage == 1)
-        {
-            _stage = 2;
-            _title.Text = "Llegadas completas — vuelos de salida";
-            _help.Text = "Abrí ahora la lista de vuelos de salida.";
-            _action.Text = "Escanear vuelos de salida";
-            _status.Text = "Llegadas guardadas.";
-        }
-        else
-        {
-            _stage = 4;
-            _title.Text = "Proceso completado";
-            _help.Text = "Revisá los resultados de llegadas y salidas. Podés exportarlos al Excel operativo.";
-            _action.Visible = false;
-            _status.Text = "Lectura terminada.";
-        }
+        _stage = 3;
+        _title.Text = "Proceso completado";
+        _help.Text = "Llegadas y salidas quedaron cargadas con sus EDITS especiales. Ya podés exportar al Excel operativo.";
+        _action.Visible = false;
+        _status.Text = "Lectura terminada.";
     }
 
     private void ExportExcel()
