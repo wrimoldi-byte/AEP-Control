@@ -150,7 +150,7 @@ public sealed class BubbleMainForm : Form
 
         async Task ProcessScreenAsync(Bitmap bmp)
         {
-            foreach (var flight in await FlightColumnReader.ReadAsync(bmp))
+            foreach (var flight in await FlightColumnReader.ReadAsync(bmp, movement))
                 MergeFlight(flight);
         }
 
@@ -413,12 +413,8 @@ public sealed class BubbleMainForm : Form
 
         void ProcessScreen(string text)
         {
-            if (string.IsNullOrWhiteSpace(text)) return;
-            foreach (var document in PassengerDocumentParser.Parse(text))
-            {
-                var key = $"{document.DocumentType}|{document.DocumentNumber}";
-                unique[key] = document;
-            }
+            foreach (var doc in PassengerDocumentParser.Parse(text))
+                unique[doc.Key] = doc;
         }
 
         try
@@ -427,22 +423,16 @@ public sealed class BubbleMainForm : Form
             {
                 using var bmp = new Bitmap(area.Width, area.Height);
                 using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(area.Location, Point.Empty, area.Size);
-
-                ProcessScreen(await OcrService.ReadContinuousAsync(bmp));
-                passes++;
-                _bubble.UpdateDocumentCount(unique.Count, passes);
+                var text = await OcrService.ReadContinuousAsync(bmp);
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    ProcessScreen(text);
+                    passes++;
+                    _bubble.UpdatePassengerDocumentCount(unique.Count, passes);
+                }
 
                 if (finishRequested)
                 {
-                    for (var i = 0; i < 3; i++)
-                    {
-                        await Task.Delay(250);
-                        using var finalBmp = new Bitmap(area.Width, area.Height);
-                        using (var g = Graphics.FromImage(finalBmp)) g.CopyFromScreen(area.Location, Point.Empty, area.Size);
-                        ProcessScreen(await OcrService.ReadContinuousAsync(finalBmp));
-                        passes++;
-                        _bubble.UpdateDocumentCount(unique.Count, passes);
-                    }
                     _cts.Cancel();
                     break;
                 }
@@ -451,25 +441,14 @@ public sealed class BubbleMainForm : Form
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            MessageBox.Show(ex.Message, "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
         finally
         {
-            _bubble?.Close(); _bubble = null; Show(); Activate();
+            _bubble?.Close();
+            _bubble = null;
+            Show();
+            Activate();
         }
 
-        var documents = unique.Values.OrderBy(d => d.Surname).ThenBy(d => d.GivenNames).ToList();
-        if (documents.Count == 0)
-        {
-            _status.Text = $"No detecté documentación después de {passes} pasadas OCR.";
-            MessageBox.Show("No se encontró documentación con el formato esperado. Probá seleccionando las líneas completas.", "Documentación de PAX", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
-
-        _status.Text = $"Documentación detectada: {documents.Count} PAX en {passes} pasadas OCR.";
-        using var results = new PassengerDocumentsForm(documents);
-        results.ShowDialog(this);
+        _status.Text = $"Documentación terminada: {unique.Count} registros únicos.";
     }
 }
