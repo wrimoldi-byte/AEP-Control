@@ -12,6 +12,8 @@ public sealed class PassengerDocument
     public string Surname { get; init; } = string.Empty;
     public string GivenNames { get; init; } = string.Empty;
 
+    public string Key => $"{DocumentType}|{IssuingCountry}|{DocumentNumber}|{Surname}|{GivenNames}|{BirthDate:yyyyMMdd}".ToUpperInvariant();
+
     public string DocumentTypeName => DocumentType switch
     {
         "I" => "Identidad",
