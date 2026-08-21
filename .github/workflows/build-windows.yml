@@ -39,10 +39,10 @@ jobs:
       - name: Compilar ejecutable
         run: dotnet publish AEPControl/AEPControl.csproj --configuration Release --runtime win-x64 --self-contained true --output publish -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 
-      - name: Subir AEP Control v2.10
+      - name: Subir AEP Control v2.11
         uses: actions/upload-artifact@v4
         with:
-          name: AEP-Control-v2.10-win-x64
+          name: AEP-Control-v2.11-win-x64
           path: publish/AEPControl.exe
           if-no-files-found: error
           retention-days: 30
