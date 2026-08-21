@@ -39,25 +39,25 @@ jobs:
       - name: Compilar ejecutable
         run: dotnet publish AEPControl/AEPControl.csproj --configuration Release --runtime win-x64 --self-contained true --output publish -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 
-      - name: Subir AEP Control v2.13 como artifact
+      - name: Subir AEP Control v2.14 como artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AEP-Control-v2.13-win-x64
+          name: AEP-Control-v2.14-win-x64
           path: publish/AEPControl.exe
           if-no-files-found: error
           retention-days: 30
 
-      - name: Crear o actualizar Release v2.13
+      - name: Crear o actualizar Release v2.14
         if: github.event_name != 'pull_request'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "v2.13"
+          $tag = "v2.14"
           $asset = "publish/AEPControl.exe"
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.13" --notes "AEP Control v2.13 - primero lee llegadas y salidas; luego recorre especiales para ambos grupos."
+            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.14" --notes "AEP Control v2.14 - perfil de lectura separado para salidas basado en la grilla de Sabre: Vuelo, Destino, Salida y Cantidad Bkd."
           } else {
             gh release upload $tag $asset --repo $env:GITHUB_REPOSITORY --clobber
           }
