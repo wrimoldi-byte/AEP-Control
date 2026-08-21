@@ -115,8 +115,6 @@ public sealed class ContinuousSpecialReader
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        // Sin formato APELLIDO/NOMBRE usamos dos tokens alfabéticos estables.
-        // Uno solo es demasiado ambiguo y no se usa como identidad fuerte.
         if (tokens.Count >= 2)
             return NormalizePassenger(tokens[0] + "/" + tokens[1]);
 
@@ -169,7 +167,6 @@ public sealed class ContinuousSpecialReader
 
     private void AddCandidate(ScreenRow row)
     {
-        // Identidad fuerte 1: EDIT + asiento.
         if (!string.IsNullOrWhiteSpace(row.Seat))
         {
             var exactSeat = _confirmed.FirstOrDefault(c =>
@@ -182,8 +179,6 @@ public sealed class ContinuousSpecialReader
             }
         }
 
-        // Identidad fuerte 2: EDIT + pasajero. Esto cubre pasajeros SIN asiento
-        // y también evita duplicarlos si el asiento desaparece/cambia por error de OCR.
         if (!string.IsNullOrWhiteSpace(row.Passenger))
         {
             var exactPassenger = _confirmed.FirstOrDefault(c =>
@@ -197,7 +192,6 @@ public sealed class ContinuousSpecialReader
             }
         }
 
-        // Respaldo: misma fila textual del mismo EDIT ya confirmada.
         var sameConfirmedRow = _confirmed.Any(c =>
             c.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
             CanonicalSimilarity(c.Canonical, row.Canonical) >= 0.82);
@@ -371,9 +365,72 @@ public sealed class ContinuousSpecialReader
     private SpecialCounts BuildCounts()
     {
         var result = new SpecialCounts();
-        foreach (var row in _confirmed)
+
+        // Para asistencia de silla de ruedas, un mismo pasajero puede venir con más de
+        // un EDIT (por ejemplo WCHR + WCHS). En ese caso no son dos pasajeros.
+        // Contamos una sola vez según la asistencia más restrictiva:
+        // WCHC > WCHS > WCHR.
+        var wheelchairRows = _confirmed
+            .Where(r => IsWheelchairCode(r.Code))
+            .ToList();
+
+        var consumed = new HashSet<ConfirmedRow>();
+        foreach (var row in wheelchairRows)
+        {
+            if (consumed.Contains(row)) continue;
+
+            var samePassenger = wheelchairRows
+                .Where(other => !consumed.Contains(other) && SamePassengerForWheelchair(row, other))
+                .ToList();
+
+            if (samePassenger.Count == 0)
+                samePassenger.Add(row);
+
+            var selectedCode = samePassenger
+                .Select(r => r.Code)
+                .OrderByDescending(WheelchairPriority)
+                .First();
+
+            AddCount(result, selectedCode);
+            foreach (var item in samePassenger)
+                consumed.Add(item);
+        }
+
+        foreach (var row in _confirmed.Where(r => !IsWheelchairCode(r.Code)))
             AddCount(result, row.Code);
+
         return result;
+    }
+
+    private static bool IsWheelchairCode(string code) =>
+        code is "WCHR" or "WCHS" or "WCHC";
+
+    private static int WheelchairPriority(string code) => code switch
+    {
+        "WCHC" => 3,
+        "WCHS" => 2,
+        "WCHR" => 1,
+        _ => 0
+    };
+
+    private static bool SamePassengerForWheelchair(ConfirmedRow a, ConfirmedRow b)
+    {
+        if (!string.IsNullOrWhiteSpace(a.Passenger) && !string.IsNullOrWhiteSpace(b.Passenger) &&
+            PassengerEquivalent(a.Passenger, b.Passenger))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(a.Seat) && !string.IsNullOrWhiteSpace(b.Seat) &&
+            a.Seat.Equals(b.Seat, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Si no hay nombre ni asiento, sólo unimos cuando la misma fila OCR contiene
+        // ambos códigos. Así evitamos fusionar dos pasajeros distintos por error.
+        if (string.IsNullOrWhiteSpace(a.Passenger) && string.IsNullOrWhiteSpace(b.Passenger) &&
+            string.IsNullOrWhiteSpace(a.Seat) && string.IsNullOrWhiteSpace(b.Seat) &&
+            CanonicalSimilarity(a.Canonical, b.Canonical) >= 0.94)
+            return true;
+
+        return ReferenceEquals(a, b);
     }
 
     private static void AddCount(SpecialCounts result, string code)
