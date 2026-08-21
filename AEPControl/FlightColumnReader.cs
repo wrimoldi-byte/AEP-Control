@@ -9,87 +9,60 @@ public static class FlightColumnReader
     private static readonly Regex OriginTokenRegex = new(@"\b(?<origin>[A-Z0-9]{3})\b", RegexOptions.Compiled);
     private static readonly Regex RawTimeRegex = new(@"\b(?<time>\d{1,2}\s*[:.]?\s*\d{2})\b", RegexOptions.Compiled);
     private static readonly Regex BookingRegex = new(@"\b(?<premium>\d{1,3})\s*[/\\|]\s*(?<economy>\d{1,3})\*?\b", RegexOptions.Compiled);
-    private static bool _diagnosticSaved;
 
     private static readonly string[] PriorityOrigins = { "GRU", "SCL", "LIM", "GIG" };
 
-    private const double FlightLeft = 0.186;
-    private const double FlightRight = 0.282;
-    private const double OriginLeft = 0.369;
-    private const double OriginRight = 0.451;
-    private const double TimeLeft = 0.527;
-    private const double TimeRight = 0.672;
-    private const double BookingLeft = 0.764;
-    private const double BookingRight = 0.943;
+    private sealed record ColumnProfile(
+        double FlightLeft, double FlightRight,
+        double AirportLeft, double AirportRight,
+        double TimeLeft, double TimeRight,
+        double BookingLeft, double BookingRight);
 
-    public static async Task<List<FlightData>> ReadAsync(Bitmap grid)
+    // Perfil histórico de llegadas: no se toca porque ya funciona.
+    private static readonly ColumnProfile ArrivalProfile = new(
+        0.186, 0.282,
+        0.369, 0.451,
+        0.527, 0.672,
+        0.764, 0.943);
+
+    // Perfil medido sobre la grilla de SALIDAS enviada:
+    // No | Aerolínea | Vuelo | Destino | Salida | Puerta | Estado | Equipo | Cantidad Bkd
+    private static readonly ColumnProfile DepartureProfile = new(
+        0.132, 0.208,
+        0.208, 0.313,
+        0.313, 0.395,
+        0.812, 0.948);
+
+    public static async Task<List<FlightData>> ReadAsync(Bitmap grid, string movement)
     {
         if (grid.Width < 400 || grid.Height < 100)
             return new List<FlightData>();
 
-        if (!_diagnosticSaved)
-        {
-            _diagnosticSaved = true;
-            try { await SaveDiagnosticAsync(grid); } catch { }
-        }
+        var profile = movement.Equals("Salida", StringComparison.OrdinalIgnoreCase)
+            ? DepartureProfile
+            : ArrivalProfile;
 
-        using var flightColumn = Crop(grid, FlightLeft, FlightRight);
-        using var originColumn = Crop(grid, OriginLeft, OriginRight);
-        using var timeColumn = Crop(grid, TimeLeft, TimeRight);
-        using var bookingColumn = Crop(grid, BookingLeft, BookingRight);
+        using var flightColumn = Crop(grid, profile.FlightLeft, profile.FlightRight);
+        using var airportColumn = Crop(grid, profile.AirportLeft, profile.AirportRight);
+        using var timeColumn = Crop(grid, profile.TimeLeft, profile.TimeRight);
+        using var bookingColumn = Crop(grid, profile.BookingLeft, profile.BookingRight);
 
         var flightText = await OcrService.ReadContinuousAsync(flightColumn);
-        var originText = await OcrService.ReadContinuousAsync(originColumn);
+        var airportText = await OcrService.ReadContinuousAsync(airportColumn);
         var timeText = await OcrService.ReadContinuousAsync(timeColumn);
         var bookingText = await OcrService.ReadContinuousAsync(bookingColumn);
 
-        return ParseColumns(flightText, originText, timeText, bookingText);
+        return ParseColumns(flightText, airportText, timeText, bookingText);
     }
 
-    public static async Task<string> SaveDiagnosticAsync(Bitmap grid)
-    {
-        var folder = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
-            "AEPControl-Diagnostico-v2");
-        Directory.CreateDirectory(folder);
-
-        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
-        grid.Save(Path.Combine(folder, $"00-grilla-{stamp}.png"), ImageFormat.Png);
-
-        using var flightColumn = Crop(grid, FlightLeft, FlightRight);
-        using var originColumn = Crop(grid, OriginLeft, OriginRight);
-        using var timeColumn = Crop(grid, TimeLeft, TimeRight);
-        using var bookingColumn = Crop(grid, BookingLeft, BookingRight);
-
-        flightColumn.Save(Path.Combine(folder, $"01-vuelo-{stamp}.png"), ImageFormat.Png);
-        originColumn.Save(Path.Combine(folder, $"02-origen-{stamp}.png"), ImageFormat.Png);
-        timeColumn.Save(Path.Combine(folder, $"03-hora-{stamp}.png"), ImageFormat.Png);
-        bookingColumn.Save(Path.Combine(folder, $"04-booking-{stamp}.png"), ImageFormat.Png);
-
-        var flightText = await OcrService.ReadContinuousAsync(flightColumn);
-        var originText = await OcrService.ReadContinuousAsync(originColumn);
-        var timeText = await OcrService.ReadContinuousAsync(timeColumn);
-        var bookingText = await OcrService.ReadContinuousAsync(bookingColumn);
-
-        File.WriteAllText(
-            Path.Combine(folder, $"05-ocr-{stamp}.txt"),
-            $"Tamaño grilla: {grid.Width}x{grid.Height}\r\n\r\n" +
-            "=== VUELO ===\r\n" + flightText + "\r\n\r\n" +
-            "=== ORIGEN ===\r\n" + originText + "\r\n\r\n" +
-            "=== HORA ===\r\n" + timeText + "\r\n\r\n" +
-            "=== BOOKING ===\r\n" + bookingText + "\r\n");
-
-        return folder;
-    }
-
-    private static List<FlightData> ParseColumns(string flightText, string originText, string timeText, string bookingText)
+    private static List<FlightData> ParseColumns(string flightText, string airportText, string timeText, string bookingText)
     {
         var flights = FlightRegex.Matches(Normalize(flightText))
             .Select(m => m.Groups["flight"].Value)
             .Where(IsPlausibleFlight)
             .ToList();
 
-        var origins = ParseOrigins(originText);
+        var airports = ParseAirports(airportText);
 
         var times = RawTimeRegex.Matches(Normalize(timeText))
             .Select(m => NormalizeTime(m.Groups["time"].Value))
@@ -103,14 +76,10 @@ public static class FlightColumnReader
                 Economy: int.Parse(m.Groups["economy"].Value)))
             .ToList();
 
-        // Vuelo es ahora la única columna obligatoria. En salidas Sabre puede mostrar
-        // la hora con ':' o con distinta separación y antes eso hacía que se descarte
-        // toda la captura. Hora, destino/origen y booking se completan sólo si vienen
-        // alineados; lecturas posteriores del mismo vuelo completan los datos faltantes.
         if (flights.Count == 0)
             return new List<FlightData>();
 
-        var originsAligned = origins.Count == flights.Count;
+        var airportsAligned = airports.Count == flights.Count;
         var timesAligned = times.Count == flights.Count;
         var bookingsAligned = bookings.Count == flights.Count;
 
@@ -120,7 +89,7 @@ public static class FlightColumnReader
             var flight = new FlightData
             {
                 Vuelo = $"LA{flights[i]}",
-                Destino = originsAligned ? origins[i] : string.Empty,
+                Destino = airportsAligned ? airports[i] : string.Empty,
                 Hora = timesAligned ? times[i] : string.Empty,
                 Equipo = string.Empty,
                 BookingKnown = false
@@ -139,7 +108,7 @@ public static class FlightColumnReader
         return result;
     }
 
-    private static List<string> ParseOrigins(string text)
+    private static List<string> ParseAirports(string text)
     {
         var normalized = text.ToUpperInvariant();
         var result = new List<string>();
@@ -147,7 +116,7 @@ public static class FlightColumnReader
         foreach (Match match in OriginTokenRegex.Matches(normalized))
         {
             var raw = match.Groups["origin"].Value;
-            var corrected = CorrectOrigin(raw);
+            var corrected = CorrectAirport(raw);
             if (corrected is not null && IsPlausibleAirport(corrected))
                 result.Add(corrected);
         }
@@ -155,7 +124,7 @@ public static class FlightColumnReader
         return result;
     }
 
-    private static string? CorrectOrigin(string raw)
+    private static string? CorrectAirport(string raw)
     {
         raw = raw.ToUpperInvariant();
 
@@ -193,10 +162,8 @@ public static class FlightColumnReader
         return number is >= 100 and <= 9999;
     }
 
-    private static bool IsPlausibleAirport(string value)
-    {
-        return value is not ("VUE" or "BKG" or "BKD" or "ETA" or "ETD" or "HOR" or "SAL" or "LLE" or "ORI" or "DES");
-    }
+    private static bool IsPlausibleAirport(string value) =>
+        value is not ("VUE" or "BKG" or "BKD" or "ETA" or "ETD" or "HOR" or "SAL" or "LLE" or "ORI" or "DES");
 
     private static string Normalize(string text)
     {
