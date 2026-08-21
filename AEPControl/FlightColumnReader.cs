@@ -10,8 +10,6 @@ public static class FlightColumnReader
     private static readonly Regex RawTimeRegex = new(@"\b(?<time>\d{4})\b", RegexOptions.Compiled);
     private static readonly Regex BookingRegex = new(@"\b(?<premium>\d{1,3})\s*[/\\|]\s*(?<economy>\d{1,3})\*?\b", RegexOptions.Compiled);
     private static bool _diagnosticSaved;
-    private static HashSet<string> _previousSignatures = new(StringComparer.OrdinalIgnoreCase);
-    private static DateTime _lastReadUtc = DateTime.MinValue;
 
     private static readonly string[] PriorityOrigins = { "GRU", "SCL", "LIM", "GIG" };
 
@@ -29,10 +27,6 @@ public static class FlightColumnReader
         if (grid.Width < 400 || grid.Height < 100)
             return new List<FlightData>();
 
-        if ((DateTime.UtcNow - _lastReadUtc).TotalSeconds > 8)
-            _previousSignatures.Clear();
-        _lastReadUtc = DateTime.UtcNow;
-
         if (!_diagnosticSaved)
         {
             _diagnosticSaved = true;
@@ -49,8 +43,7 @@ public static class FlightColumnReader
         var timeText = await OcrService.ReadContinuousAsync(timeColumn);
         var bookingText = await OcrService.ReadContinuousAsync(bookingColumn);
 
-        var parsed = ParseColumns(flightText, originText, timeText, bookingText);
-        return ConfirmStableRows(parsed);
+        return ParseColumns(flightText, originText, timeText, bookingText);
     }
 
     public static async Task<string> SaveDiagnosticAsync(Bitmap grid)
@@ -110,26 +103,39 @@ public static class FlightColumnReader
                 Economy: int.Parse(m.Groups["economy"].Value)))
             .ToList();
 
-        // Para evitar que durante el scroll se mezclen columnas de filas distintas,
-        // sólo aceptamos capturas donde las tres columnas operativas estén alineadas.
-        if (flights.Count == 0 || times.Count != flights.Count || bookings.Count != flights.Count)
+        // La versión anterior descartaba TODA la pantalla si Booking u Hora
+        // no tenían exactamente la misma cantidad de filas que Vuelo.
+        // Eso hacía que llegadas quedara en cero ante un solo fallo del OCR.
+        // Ahora Vuelo + Hora son la base; Origen y Booking se completan sólo
+        // cuando esa columna viene alineada. El diccionario de BubbleMainForm
+        // fusiona lecturas posteriores del mismo vuelo y completa lo faltante.
+        if (flights.Count == 0 || times.Count == 0)
             return new List<FlightData>();
 
+        var rowCount = Math.Min(flights.Count, times.Count);
         var originsAligned = origins.Count == flights.Count;
-        var result = new List<FlightData>(flights.Count);
+        var bookingsAligned = bookings.Count == flights.Count;
 
-        for (var i = 0; i < flights.Count; i++)
+        var result = new List<FlightData>(rowCount);
+        for (var i = 0; i < rowCount; i++)
         {
-            result.Add(new FlightData
+            var flight = new FlightData
             {
                 Vuelo = $"LA{flights[i]}",
                 Destino = originsAligned ? origins[i] : string.Empty,
                 Hora = times[i],
                 Equipo = string.Empty,
-                Premium = bookings[i].Premium,
-                Economy = bookings[i].Economy,
-                BookingKnown = true
-            });
+                BookingKnown = false
+            };
+
+            if (bookingsAligned)
+            {
+                flight.Premium = bookings[i].Premium;
+                flight.Economy = bookings[i].Economy;
+                flight.BookingKnown = true;
+            }
+
+            result.Add(flight);
         }
 
         return result;
@@ -158,7 +164,6 @@ public static class FlightColumnReader
         if (PriorityOrigins.Contains(raw, StringComparer.OrdinalIgnoreCase))
             return raw;
 
-        // Errores habituales del OCR de Windows en códigos IATA.
         var corrected = raw
             .Replace('1', 'I')
             .Replace('0', 'O')
@@ -168,7 +173,6 @@ public static class FlightColumnReader
         if (PriorityOrigins.Contains(corrected, StringComparer.OrdinalIgnoreCase))
             return corrected;
 
-        // Casos frecuentes concretos: G1G -> GIG, L1M -> LIM, SC1 -> SCL.
         if (raw is "G1G" or "GIG") return "GIG";
         if (raw is "L1M" or "LIM") return "LIM";
         if (raw is "SC1" or "SCL") return "SCL";
@@ -176,24 +180,6 @@ public static class FlightColumnReader
 
         return raw.All(char.IsLetter) ? raw : null;
     }
-
-    private static List<FlightData> ConfirmStableRows(List<FlightData> parsed)
-    {
-        var current = parsed
-            .Where(f => f.BookingKnown && !string.IsNullOrWhiteSpace(f.Hora))
-            .ToDictionary(Signature, f => f, StringComparer.OrdinalIgnoreCase);
-
-        var confirmed = current
-            .Where(kvp => _previousSignatures.Contains(kvp.Key))
-            .Select(kvp => kvp.Value)
-            .ToList();
-
-        _previousSignatures = current.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return confirmed;
-    }
-
-    private static string Signature(FlightData flight) =>
-        $"{flight.Vuelo}|{flight.Hora}|{flight.Premium:000}/{flight.Economy:000}";
 
     private static Bitmap Crop(Bitmap source, double leftRatio, double rightRatio)
     {
@@ -233,7 +219,6 @@ public static class FlightColumnReader
         if (hour <= 23)
             return raw.Insert(2, ":");
 
-        // Error observado en Sabre/Windows OCR: 0740 puede llegar como 3740.
         var repaired = "0" + raw[1..];
         var repairedHour = int.Parse(repaired[..2]);
         return repairedHour <= 23 ? repaired.Insert(2, ":") : null;
