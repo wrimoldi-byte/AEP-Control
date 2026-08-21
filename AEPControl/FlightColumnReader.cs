@@ -7,7 +7,7 @@ public static class FlightColumnReader
 {
     private static readonly Regex FlightRegex = new(@"\b(?<flight>\d{3,4})\b", RegexOptions.Compiled);
     private static readonly Regex OriginTokenRegex = new(@"\b(?<origin>[A-Z0-9]{3})\b", RegexOptions.Compiled);
-    private static readonly Regex RawTimeRegex = new(@"\b(?<time>\d{4})\b", RegexOptions.Compiled);
+    private static readonly Regex RawTimeRegex = new(@"\b(?<time>\d{1,2}\s*[:.]?\s*\d{2})\b", RegexOptions.Compiled);
     private static readonly Regex BookingRegex = new(@"\b(?<premium>\d{1,3})\s*[/\\|]\s*(?<economy>\d{1,3})\*?\b", RegexOptions.Compiled);
     private static bool _diagnosticSaved;
 
@@ -103,27 +103,25 @@ public static class FlightColumnReader
                 Economy: int.Parse(m.Groups["economy"].Value)))
             .ToList();
 
-        // La versión anterior descartaba TODA la pantalla si Booking u Hora
-        // no tenían exactamente la misma cantidad de filas que Vuelo.
-        // Eso hacía que llegadas quedara en cero ante un solo fallo del OCR.
-        // Ahora Vuelo + Hora son la base; Origen y Booking se completan sólo
-        // cuando esa columna viene alineada. El diccionario de BubbleMainForm
-        // fusiona lecturas posteriores del mismo vuelo y completa lo faltante.
-        if (flights.Count == 0 || times.Count == 0)
+        // Vuelo es ahora la única columna obligatoria. En salidas Sabre puede mostrar
+        // la hora con ':' o con distinta separación y antes eso hacía que se descarte
+        // toda la captura. Hora, destino/origen y booking se completan sólo si vienen
+        // alineados; lecturas posteriores del mismo vuelo completan los datos faltantes.
+        if (flights.Count == 0)
             return new List<FlightData>();
 
-        var rowCount = Math.Min(flights.Count, times.Count);
         var originsAligned = origins.Count == flights.Count;
+        var timesAligned = times.Count == flights.Count;
         var bookingsAligned = bookings.Count == flights.Count;
 
-        var result = new List<FlightData>(rowCount);
-        for (var i = 0; i < rowCount; i++)
+        var result = new List<FlightData>(flights.Count);
+        for (var i = 0; i < flights.Count; i++)
         {
             var flight = new FlightData
             {
                 Vuelo = $"LA{flights[i]}",
                 Destino = originsAligned ? origins[i] : string.Empty,
-                Hora = times[i],
+                Hora = timesAligned ? times[i] : string.Empty,
                 Equipo = string.Empty,
                 BookingKnown = false
             };
@@ -197,7 +195,7 @@ public static class FlightColumnReader
 
     private static bool IsPlausibleAirport(string value)
     {
-        return value is not ("VUE" or "BKG" or "BKD" or "ETA" or "HOR" or "SAL" or "LLE" or "ORI");
+        return value is not ("VUE" or "BKG" or "BKD" or "ETA" or "ETD" or "HOR" or "SAL" or "LLE" or "ORI" or "DES");
     }
 
     private static string Normalize(string text)
@@ -210,16 +208,18 @@ public static class FlightColumnReader
 
     private static string? NormalizeTime(string raw)
     {
-        if (raw.Length != 4 || !raw.All(char.IsDigit)) return null;
+        var digits = Regex.Replace(raw, @"\D", string.Empty);
+        if (digits.Length == 3) digits = "0" + digits;
+        if (digits.Length != 4 || !digits.All(char.IsDigit)) return null;
 
-        var hour = int.Parse(raw[..2]);
-        var minute = int.Parse(raw[2..]);
+        var hour = int.Parse(digits[..2]);
+        var minute = int.Parse(digits[2..]);
         if (minute > 59) return null;
 
         if (hour <= 23)
-            return raw.Insert(2, ":");
+            return digits.Insert(2, ":");
 
-        var repaired = "0" + raw[1..];
+        var repaired = "0" + digits[1..];
         var repairedHour = int.Parse(repaired[..2]);
         return repairedHour <= 23 ? repaired.Insert(2, ":") : null;
     }
