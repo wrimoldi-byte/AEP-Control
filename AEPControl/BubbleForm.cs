@@ -110,6 +110,8 @@ public sealed class BubbleForm : Form
         _counts.Text = $"Documentos únicos: {count}\nOCR continuo · pasada {pass}";
     }
 
+    public void UpdatePassengerDocumentCount(int count, int pass = 0) => UpdateDocumentCount(count, pass);
+
     public void SetStopped()
     {
         _state.Text = "● Detenido";
