@@ -16,7 +16,7 @@ on:
       - ".github/workflows/build-windows.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -39,10 +39,25 @@ jobs:
       - name: Compilar ejecutable
         run: dotnet publish AEPControl/AEPControl.csproj --configuration Release --runtime win-x64 --self-contained true --output publish -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 
-      - name: Subir AEP Control v2.11
+      - name: Subir AEP Control v2.11 como artifact
         uses: actions/upload-artifact@v4
         with:
           name: AEP-Control-v2.11-win-x64
           path: publish/AEPControl.exe
           if-no-files-found: error
           retention-days: 30
+
+      - name: Crear o actualizar Release v2.11
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v2.11"
+          $asset = "publish/AEPControl.exe"
+          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.11" --notes "AEP Control v2.11 - lectura de llegadas y salidas + exportacion al Excel operativo."
+          } else {
+            gh release upload $tag $asset --repo $env:GITHUB_REPOSITORY --clobber
+          }
