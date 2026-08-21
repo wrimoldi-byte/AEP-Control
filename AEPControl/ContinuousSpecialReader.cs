@@ -5,22 +5,31 @@ namespace AEPControl;
 
 public sealed class ContinuousSpecialReader
 {
-    private sealed class SeenRow
+    private sealed class ConfirmedRow
     {
         public string Code { get; init; } = string.Empty;
         public string Seat { get; init; } = string.Empty;
         public string Canonical { get; set; } = string.Empty;
     }
 
+    private sealed class PendingRow
+    {
+        public string Code { get; init; } = string.Empty;
+        public string Canonical { get; set; } = string.Empty;
+        public int ConsecutiveHits { get; set; }
+        public int LastFrame { get; set; }
+    }
+
     private sealed record ScreenRow(string Code, string Seat, string Canonical);
-    private sealed record Alignment(int Offset, int Matches, int Mismatches, int Overlap, double Score);
 
     private readonly Regex _codeRegex;
     private static readonly Regex SeatRegex = new(@"\b(?<seat>\d{1,2}[A-F])\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private readonly List<SeenRow> _sequence = new();
+    private readonly List<ConfirmedRow> _confirmed = new();
+    private readonly List<PendingRow> _pendingNoSeat = new();
+    private int _frame;
 
-    public int UniqueRows => _sequence.Count;
+    public int UniqueRows => _confirmed.Count;
 
     public ContinuousSpecialReader()
     {
@@ -34,33 +43,30 @@ public sealed class ContinuousSpecialReader
 
     public SpecialCounts AddOcrText(string text)
     {
+        _frame++;
         var current = ParseScreen(text);
         if (current.Count == 0)
             return BuildCounts();
 
-        // Un mismo asiento puede tener varios edits diferentes.
-        // Sólo eliminamos repetidos de la MISMA combinación ASIENTO + EDIT.
-        current = current
-            .GroupBy(r => SeatCodeKey(r.Seat, r.Code), StringComparer.OrdinalIgnoreCase)
-            .Select(g => g.OrderByDescending(r => r.Canonical.Length).First())
-            .ToList();
+        // Eliminamos repeticiones dentro de la misma captura antes de tocar el acumulado.
+        current = DeduplicateCurrentScreen(current);
 
-        if (_sequence.Count == 0)
+        foreach (var row in current)
         {
-            foreach (var row in current)
-                AddIfNew(row);
-            return BuildCounts();
+            if (!string.IsNullOrWhiteSpace(row.Seat))
+            {
+                AddSeatRow(row);
+                continue;
+            }
+
+            AddNoSeatRow(row);
         }
 
-        var alignment = FindBestAlignment(current);
-        if (alignment is null)
-        {
-            foreach (var row in current)
-                AddIfNew(row);
-            return BuildCounts();
-        }
+        // Un candidato sin asiento debe reaparecer en capturas consecutivas.
+        // Si desaparece durante varios frames, se descarta para que un error aislado de OCR
+        // no se transforme en un pasajero/edit nuevo.
+        _pendingNoSeat.RemoveAll(p => _frame - p.LastFrame > 2);
 
-        MergeAlignedScreen(current, alignment.Offset);
         return BuildCounts();
     }
 
@@ -73,9 +79,6 @@ public sealed class ContinuousSpecialReader
             var line = Regex.Replace(raw.ToUpperInvariant(), @"\s+", " ").Trim();
             if (line.Length < 3) continue;
 
-            // IMPORTANTE: una misma línea de pasajero puede traer más de un edit.
-            // Antes usábamos Match() y sólo tomábamos el primero. Ahora usamos Matches()
-            // y generamos una entrada independiente por cada código encontrado.
             var codeMatches = _codeRegex.Matches(line);
             if (codeMatches.Count == 0) continue;
 
@@ -83,133 +86,116 @@ public sealed class ContinuousSpecialReader
             var seat = seatMatch.Success ? NormalizeSeat(seatMatch.Groups["seat"].Value) : string.Empty;
             var canonical = Canonicalize(line);
 
-            var codesOnLine = codeMatches
+            foreach (var code in codeMatches
                 .Select(m => m.Value.ToUpperInvariant())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            foreach (var code in codesOnLine)
+                .Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                var rowCanonical = canonical.Length < code.Length ? code : canonical;
-                result.Add(new ScreenRow(code, seat, rowCanonical));
+                result.Add(new ScreenRow(code, seat, canonical));
             }
         }
 
         return result;
     }
 
-    private void AddIfNew(ScreenRow row)
+    private static List<ScreenRow> DeduplicateCurrentScreen(List<ScreenRow> rows)
     {
-        if (IsAlreadySeenBySeatAndCode(row)) return;
+        var result = new List<ScreenRow>();
 
-        if (string.IsNullOrWhiteSpace(row.Seat))
+        foreach (var row in rows)
         {
-            var similar = _sequence.Any(seen =>
-                seen.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
-                RowSimilarity(row, seen) >= 0.84);
-            if (similar) return;
-        }
-
-        _sequence.Add(new SeenRow { Code = row.Code, Seat = row.Seat, Canonical = row.Canonical });
-    }
-
-    private bool IsAlreadySeenBySeatAndCode(ScreenRow row)
-    {
-        if (string.IsNullOrWhiteSpace(row.Seat)) return false;
-
-        return _sequence.Any(seen =>
-            seen.Seat.Equals(row.Seat, StringComparison.OrdinalIgnoreCase) &&
-            seen.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private Alignment? FindBestAlignment(IReadOnlyList<ScreenRow> current)
-    {
-        Alignment? best = null;
-
-        for (var offset = -current.Count + 1; offset <= _sequence.Count - 1; offset++)
-        {
-            var matches = 0;
-            var mismatches = 0;
-            var overlap = 0;
-            double similaritySum = 0;
-
-            for (var i = 0; i < current.Count; i++)
+            if (!string.IsNullOrWhiteSpace(row.Seat))
             {
-                var globalIndex = i + offset;
-                if (globalIndex < 0 || globalIndex >= _sequence.Count) continue;
-
-                overlap++;
-                var similarity = RowSimilarity(current[i], _sequence[globalIndex]);
-                if (similarity >= 0.68)
-                {
-                    matches++;
-                    similaritySum += similarity;
-                }
-                else
-                {
-                    mismatches++;
-                }
-            }
-
-            if (overlap == 0 || matches == 0) continue;
-
-            var average = matches == 0 ? 0 : similaritySum / matches;
-            var acceptable = overlap switch
-            {
-                1 => matches == 1 && average >= 0.88,
-                2 => matches >= 1 && average >= 0.82,
-                _ => matches >= 2 && matches >= mismatches
-            };
-            if (!acceptable) continue;
-
-            var score = matches * 5.0 - mismatches * 2.5 + average * 2.0 + overlap * 0.05;
-            var candidate = new Alignment(offset, matches, mismatches, overlap, score);
-
-            if (best is null || candidate.Score > best.Score ||
-                (Math.Abs(candidate.Score - best.Score) < 0.001 && candidate.Matches > best.Matches))
-                best = candidate;
-        }
-
-        return best;
-    }
-
-    private void MergeAlignedScreen(IReadOnlyList<ScreenRow> current, int offset)
-    {
-        var leadingCount = Math.Min(current.Count, Math.Max(0, -offset));
-        if (leadingCount > 0)
-        {
-            var leading = current.Take(leadingCount)
-                .Where(r => !IsAlreadySeenBySeatAndCode(r))
-                .Where(r => string.IsNullOrWhiteSpace(r.Seat) || !_sequence.Any(s => s.Code.Equals(r.Code, StringComparison.OrdinalIgnoreCase) && RowSimilarity(r, s) >= 0.84))
-                .Select(r => new SeenRow { Code = r.Code, Seat = r.Seat, Canonical = r.Canonical })
-                .ToList();
-            _sequence.InsertRange(0, leading);
-            offset += leadingCount;
-        }
-
-        for (var i = 0; i < current.Count; i++)
-        {
-            var row = current[i];
-
-            // El bloqueo de duplicados es por ASIENTO + EDIT, no sólo por asiento.
-            // Ej.: 12A WCHR + 12A INF son dos registros válidos; 12A WCHR repetido no.
-            if (IsAlreadySeenBySeatAndCode(row))
-                continue;
-
-            var globalIndex = i + offset;
-            if (globalIndex >= 0 && globalIndex < _sequence.Count)
-            {
-                var seen = _sequence[globalIndex];
-                if (RowSimilarity(row, seen) >= 0.68)
-                {
-                    if (row.Canonical.Length > seen.Canonical.Length)
-                        seen.Canonical = row.Canonical;
+                if (result.Any(r =>
+                    r.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
+                    r.Seat.Equals(row.Seat, StringComparison.OrdinalIgnoreCase)))
                     continue;
-                }
+
+                result.Add(row);
+                continue;
             }
 
-            AddIfNew(row);
+            var duplicate = result.Any(r =>
+                string.IsNullOrWhiteSpace(r.Seat) &&
+                r.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
+                CanonicalSimilarity(r.Canonical, row.Canonical) >= 0.90);
+
+            if (!duplicate)
+                result.Add(row);
         }
+
+        return result;
+    }
+
+    private void AddSeatRow(ScreenRow row)
+    {
+        var existing = _confirmed.FirstOrDefault(seen =>
+            seen.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
+            seen.Seat.Equals(row.Seat, StringComparison.OrdinalIgnoreCase));
+
+        if (existing is not null)
+        {
+            if (row.Canonical.Length > existing.Canonical.Length)
+                existing.Canonical = row.Canonical;
+            return;
+        }
+
+        _confirmed.Add(new ConfirmedRow
+        {
+            Code = row.Code,
+            Seat = row.Seat,
+            Canonical = row.Canonical
+        });
+    }
+
+    private void AddNoSeatRow(ScreenRow row)
+    {
+        // Primero comparamos contra TODO lo ya confirmado del vuelo, no sólo contra la
+        // pantalla previa ni contra la misma posición visual.
+        var confirmedMatch = _confirmed.Any(seen =>
+            seen.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
+            CanonicalSimilarity(seen.Canonical, row.Canonical) >= 0.84);
+
+        if (confirmedMatch)
+            return;
+
+        var pending = _pendingNoSeat
+            .Where(p => p.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(p => CanonicalSimilarity(p.Canonical, row.Canonical))
+            .FirstOrDefault(p => CanonicalSimilarity(p.Canonical, row.Canonical) >= 0.82);
+
+        if (pending is null)
+        {
+            _pendingNoSeat.Add(new PendingRow
+            {
+                Code = row.Code,
+                Canonical = row.Canonical,
+                ConsecutiveHits = 1,
+                LastFrame = _frame
+            });
+            return;
+        }
+
+        if (pending.LastFrame == _frame)
+            return;
+
+        pending.ConsecutiveHits = pending.LastFrame == _frame - 1
+            ? pending.ConsecutiveHits + 1
+            : 1;
+        pending.LastFrame = _frame;
+
+        if (row.Canonical.Length > pending.Canonical.Length)
+            pending.Canonical = row.Canonical;
+
+        if (pending.ConsecutiveHits < 2)
+            return;
+
+        _confirmed.Add(new ConfirmedRow
+        {
+            Code = pending.Code,
+            Seat = string.Empty,
+            Canonical = pending.Canonical
+        });
+        _pendingNoSeat.Remove(pending);
     }
 
     private static string NormalizeSeat(string value)
@@ -226,26 +212,13 @@ public sealed class ContinuousSpecialReader
         return $"{numberPart}{letter}";
     }
 
-    private static string SeatCodeKey(string seat, string code) =>
-        string.IsNullOrWhiteSpace(seat) ? $"NOSEAT|{code}|{Guid.NewGuid()}" : $"{seat}|{code}";
-
-    private static double RowSimilarity(ScreenRow current, SeenRow seen)
+    private static double CanonicalSimilarity(string a, string b)
     {
-        if (!current.Code.Equals(seen.Code, StringComparison.OrdinalIgnoreCase))
-            return 0;
-
-        if (!string.IsNullOrWhiteSpace(current.Seat) && !string.IsNullOrWhiteSpace(seen.Seat))
-        {
-            if (current.Seat.Equals(seen.Seat, StringComparison.OrdinalIgnoreCase))
-                return 1;
-            return 0;
-        }
-
-        if (current.Canonical.Equals(seen.Canonical, StringComparison.OrdinalIgnoreCase))
+        if (a.Equals(b, StringComparison.OrdinalIgnoreCase))
             return 1;
 
-        var charSimilarity = Similarity(current.Canonical, seen.Canonical);
-        var tokenSimilarity = TokenSimilarity(current.Canonical, seen.Canonical);
+        var charSimilarity = Similarity(a, b);
+        var tokenSimilarity = TokenSimilarity(a, b);
         return Math.Max(charSimilarity, tokenSimilarity);
     }
 
@@ -258,7 +231,7 @@ public sealed class ContinuousSpecialReader
         var intersection = aTokens.Intersect(bTokens, StringComparer.OrdinalIgnoreCase).Count();
         if (intersection == 0) return 0;
 
-        var denominator = Math.Min(aTokens.Count, bTokens.Count);
+        var denominator = Math.Max(aTokens.Count, bTokens.Count);
         return (double)intersection / denominator;
     }
 
@@ -320,7 +293,7 @@ public sealed class ContinuousSpecialReader
     private SpecialCounts BuildCounts()
     {
         var result = new SpecialCounts();
-        foreach (var row in _sequence)
+        foreach (var row in _confirmed)
             AddCount(result, row.Code);
         return result;
     }
