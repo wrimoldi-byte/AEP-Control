@@ -42,19 +42,65 @@ public static class FlightColumnReader
             ? DepartureProfile
             : ArrivalProfile;
 
-        using var flightColumn = Crop(grid, profile.FlightLeft, profile.FlightRight);
-        using var airportColumn = Crop(grid, profile.AirportLeft, profile.AirportRight);
-        using var timeColumn = Crop(grid, profile.TimeLeft, profile.TimeRight);
-        using var bookingColumn = Crop(grid, profile.BookingLeft, profile.BookingRight);
+        var isDeparture = movement.Equals("Salida", StringComparison.OrdinalIgnoreCase);
+        var primaryTask = ReadProfileAsync(grid, profile, isDeparture, 0);
+        if (!isDeparture)
+            return await primaryTask;
 
-        var flightText = await OcrService.ReadContinuousAsync(flightColumn);
-        var airportText = await OcrService.ReadContinuousAsync(airportColumn);
-        var timeText = await OcrService.ReadContinuousAsync(timeColumn);
-        var bookingText = await OcrService.ReadContinuousAsync(bookingColumn);
+        // Windows OCR suele ignorar el primer renglón cuando queda pegado al
+        // borde del recorte. Una segunda pasada con margen blanco recupera esa
+        // fila. Luego se fusionan los resultados por número de vuelo.
+        var paddedTask = ReadProfileAsync(grid, profile, true, 22);
+        await Task.WhenAll(primaryTask, paddedTask);
+        return MergeRows(primaryTask.Result, paddedTask.Result);
+    }
 
-        return movement.Equals("Salida", StringComparison.OrdinalIgnoreCase)
-            ? ParseDepartureColumns(flightText, airportText, timeText, bookingText)
-            : ParseArrivalColumns(flightText, airportText, timeText, bookingText);
+    private static async Task<List<FlightData>> ReadProfileAsync(
+        Bitmap grid,
+        ColumnProfile profile,
+        bool departure,
+        int padding)
+    {
+        using var flightColumn = Crop(grid, profile.FlightLeft, profile.FlightRight, padding);
+        using var airportColumn = Crop(grid, profile.AirportLeft, profile.AirportRight, padding);
+        using var timeColumn = Crop(grid, profile.TimeLeft, profile.TimeRight, padding);
+        using var bookingColumn = Crop(grid, profile.BookingLeft, profile.BookingRight, padding);
+
+        var flightTask = OcrService.ReadContinuousAsync(flightColumn);
+        var airportTask = OcrService.ReadContinuousAsync(airportColumn);
+        var timeTask = OcrService.ReadContinuousAsync(timeColumn);
+        var bookingTask = OcrService.ReadContinuousAsync(bookingColumn);
+        await Task.WhenAll(flightTask, airportTask, timeTask, bookingTask);
+
+        return departure
+            ? ParseDepartureColumns(flightTask.Result, airportTask.Result, timeTask.Result, bookingTask.Result)
+            : ParseArrivalColumns(flightTask.Result, airportTask.Result, timeTask.Result, bookingTask.Result);
+    }
+
+    private static List<FlightData> MergeRows(params IEnumerable<FlightData>[] readings)
+    {
+        var result = new Dictionary<string, FlightData>(StringComparer.OrdinalIgnoreCase);
+        foreach (var incoming in readings.SelectMany(x => x))
+        {
+            if (!result.TryGetValue(incoming.Vuelo, out var existing))
+            {
+                result[incoming.Vuelo] = incoming;
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(existing.Destino) && !string.IsNullOrWhiteSpace(incoming.Destino))
+                existing.Destino = incoming.Destino;
+            if (string.IsNullOrWhiteSpace(existing.Hora) && !string.IsNullOrWhiteSpace(incoming.Hora))
+                existing.Hora = incoming.Hora;
+            if (!existing.BookingKnown && incoming.BookingKnown)
+            {
+                existing.Premium = incoming.Premium;
+                existing.Economy = incoming.Economy;
+                existing.BookingKnown = true;
+            }
+        }
+
+        return result.Values.ToList();
     }
 
     // Llegadas conserva su criterio histórico (v2.13): Vuelo + Hora forman la
@@ -186,12 +232,20 @@ public static class FlightColumnReader
         return raw.All(char.IsLetter) ? raw : null;
     }
 
-    private static Bitmap Crop(Bitmap source, double leftRatio, double rightRatio)
+    private static Bitmap Crop(Bitmap source, double leftRatio, double rightRatio, int padding = 0)
     {
         var left = Math.Clamp((int)Math.Round(source.Width * leftRatio), 0, source.Width - 1);
         var right = Math.Clamp((int)Math.Round(source.Width * rightRatio), left + 1, source.Width);
         var rect = new Rectangle(left, 0, right - left, source.Height);
-        return source.Clone(rect, source.PixelFormat);
+        using var cropped = source.Clone(rect, source.PixelFormat);
+        if (padding <= 0)
+            return new Bitmap(cropped);
+
+        var result = new Bitmap(cropped.Width + padding * 2, cropped.Height + padding * 2);
+        using var graphics = Graphics.FromImage(result);
+        graphics.Clear(Color.White);
+        graphics.DrawImageUnscaled(cropped, padding, padding);
+        return result;
     }
 
     private static bool IsPlausibleFlight(string value)
