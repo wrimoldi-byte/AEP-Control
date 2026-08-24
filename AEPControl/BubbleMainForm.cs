@@ -11,6 +11,8 @@ public sealed class BubbleMainForm : Form
     private readonly Label _help = new();
     private readonly Label _status = new();
     private readonly Button _action = new();
+    private readonly Button _readArrivals = new();
+    private readonly Button _readDepartures = new();
     private readonly Button _export = new();
     private int _stage;
     private int _index = -1;
@@ -20,7 +22,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v2.16";
+        Text = "AEP Control v2.17";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1280, 720);
         TopMost = true;
@@ -37,6 +39,16 @@ public sealed class BubbleMainForm : Form
         _action.AutoSize = true;
         _action.Padding = new Padding(12, 7, 12, 7);
         _action.Click += async (_, _) => await ActAsync();
+
+        _readArrivals.Text = "Leer llegadas";
+        _readArrivals.AutoSize = true;
+        _readArrivals.Padding = new Padding(12, 7, 12, 7);
+        _readArrivals.Click += async (_, _) => await ScanFlightsAsync("Llegada");
+
+        _readDepartures.Text = "Leer salidas";
+        _readDepartures.AutoSize = true;
+        _readDepartures.Padding = new Padding(12, 7, 12, 7);
+        _readDepartures.Click += async (_, _) => await ScanFlightsAsync("Salida");
 
         _export.Text = "Exportar Excel";
         _export.AutoSize = true;
@@ -57,7 +69,7 @@ public sealed class BubbleMainForm : Form
         _status.Padding = new Padding(12, 11, 0, 0);
 
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 62, Padding = new Padding(12, 8, 12, 4) };
-        bar.Controls.AddRange(new Control[] { _action, readDocuments, _export, configuration, reset, _status });
+        bar.Controls.AddRange(new Control[] { _readArrivals, _readDepartures, _action, readDocuments, _export, configuration, reset, _status });
 
         _grid.Dock = DockStyle.Fill;
         _grid.AutoGenerateColumns = false;
@@ -97,11 +109,12 @@ public sealed class BubbleMainForm : Form
         _stage = 0;
         _index = -1;
         _chooseStartFromSelection = false;
-        _action.Visible = true;
+        _readArrivals.Visible = true;
+        _readDepartures.Visible = true;
+        _action.Visible = false;
         _export.Enabled = false;
         _title.Text = "Paso 1 — Vuelos de llegada";
         _help.Text = "Marcá SOLO la grilla de Sabre: desde los encabezados No/Aerolínea/Vuelo hasta la última fila visible. La app leerá Vuelo, Origen, Hora y Booking por columnas mientras hacés scroll.";
-        _action.Text = "Iniciar lectura de llegadas";
         _status.Text = "Esperando lectura.";
         Show();
     }
@@ -200,6 +213,11 @@ public sealed class BubbleMainForm : Form
             return;
         }
 
+        // Permite repetir una lectura sin duplicar el movimiento ya cargado.
+        for (var i = _flights.Count - 1; i >= 0; i--)
+            if (_flights[i].Movimiento.Equals(movement, StringComparison.OrdinalIgnoreCase))
+                _flights.RemoveAt(i);
+
         foreach (var flight in unique.Values.OrderBy(x => x.Hora).ThenBy(x => x.Vuelo))
             _flights.Add(flight);
 
@@ -209,9 +227,8 @@ public sealed class BubbleMainForm : Form
         {
             _stage = 1;
             _title.Text = "Paso 2 — Vuelos de salida";
-            _help.Text = "Llegadas guardadas. Abrí ahora la grilla de salidas y hacé la misma lectura: Vuelo, Destino, Hora y Booking.";
-            _action.Text = "Iniciar lectura de salidas";
-            _status.Text = $"Llegadas guardadas: {unique.Count} vuelos. Ahora leemos salidas.";
+            _help.Text = "Llegadas guardadas. Abrí la grilla de salidas y presioná el botón fijo «Leer salidas».";
+            _status.Text = $"Llegadas guardadas: {unique.Count} vuelos. Botón «Leer salidas» disponible arriba.";
             return;
         }
 
@@ -238,6 +255,7 @@ public sealed class BubbleMainForm : Form
         _stage = 2;
         _index = 0;
         _chooseStartFromSelection = true;
+        _action.Visible = true;
         _title.Text = "Paso 3 — Especiales de llegadas y salidas";
         _help.Text = "Ya están cargadas llegadas y salidas. Seleccioná desde qué vuelo querés comenzar; se leerán los mismos EDITS para ambos tipos de vuelo.";
         _action.Text = "Iniciar especiales desde vuelo seleccionado";
