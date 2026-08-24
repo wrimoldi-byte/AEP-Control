@@ -52,39 +52,57 @@ public static class FlightColumnReader
         var timeText = await OcrService.ReadContinuousAsync(timeColumn);
         var bookingText = await OcrService.ReadContinuousAsync(bookingColumn);
 
-        return ParseColumns(flightText, airportText, timeText, bookingText);
+        return movement.Equals("Salida", StringComparison.OrdinalIgnoreCase)
+            ? ParseDepartureColumns(flightText, airportText, timeText, bookingText)
+            : ParseArrivalColumns(flightText, airportText, timeText, bookingText);
     }
 
-    private static List<FlightData> ParseColumns(string flightText, string airportText, string timeText, string bookingText)
+    // Llegadas conserva su criterio histórico (v2.13): Vuelo + Hora forman la
+    // fila base. Origen y Booking se completan cuando sus columnas vienen
+    // alineadas. Mantener este camino separado evita que los ajustes de la
+    // grilla de salidas vuelvan a romper una lectura que ya funcionaba.
+    private static List<FlightData> ParseArrivalColumns(string flightText, string airportText, string timeText, string bookingText)
     {
-        var flights = FlightRegex.Matches(Normalize(flightText))
-            .Select(m => m.Groups["flight"].Value)
-            .Where(IsPlausibleFlight)
-            .ToList();
-
+        var flights = ParseFlights(flightText);
         var airports = ParseAirports(airportText);
+        var times = ParseTimes(timeText);
+        var bookings = ParseBookings(bookingText);
 
-        var times = RawTimeRegex.Matches(Normalize(timeText))
-            .Select(m => NormalizeTime(m.Groups["time"].Value))
-            .Where(value => value is not null)
-            .Cast<string>()
-            .ToList();
+        if (flights.Count == 0 || times.Count == 0)
+            return new List<FlightData>();
 
-        var bookings = BookingRegex.Matches(Normalize(bookingText))
-            .Select(m => (
-                Premium: int.Parse(m.Groups["premium"].Value),
-                Economy: int.Parse(m.Groups["economy"].Value)))
-            .ToList();
+        var rowCount = Math.Min(flights.Count, times.Count);
+        return BuildRows(flights, airports, times, bookings, rowCount);
+    }
+
+    // Salidas sólo necesita reconocer el número de vuelo. El resto de los
+    // datos puede completarse en capturas posteriores durante el scroll.
+    private static List<FlightData> ParseDepartureColumns(string flightText, string airportText, string timeText, string bookingText)
+    {
+        var flights = ParseFlights(flightText);
+        var airports = ParseAirports(airportText);
+        var times = ParseTimes(timeText);
+        var bookings = ParseBookings(bookingText);
 
         if (flights.Count == 0)
             return new List<FlightData>();
 
+        return BuildRows(flights, airports, times, bookings, flights.Count);
+    }
+
+    private static List<FlightData> BuildRows(
+        List<string> flights,
+        List<string> airports,
+        List<string> times,
+        List<(int Premium, int Economy)> bookings,
+        int rowCount)
+    {
         var airportsAligned = airports.Count == flights.Count;
         var timesAligned = times.Count == flights.Count;
         var bookingsAligned = bookings.Count == flights.Count;
 
-        var result = new List<FlightData>(flights.Count);
-        for (var i = 0; i < flights.Count; i++)
+        var result = new List<FlightData>(rowCount);
+        for (var i = 0; i < rowCount; i++)
         {
             var flight = new FlightData
             {
@@ -107,6 +125,26 @@ public static class FlightColumnReader
 
         return result;
     }
+
+    private static List<string> ParseFlights(string text) =>
+        FlightRegex.Matches(Normalize(text))
+            .Select(m => m.Groups["flight"].Value)
+            .Where(IsPlausibleFlight)
+            .ToList();
+
+    private static List<string> ParseTimes(string text) =>
+        RawTimeRegex.Matches(Normalize(text))
+            .Select(m => NormalizeTime(m.Groups["time"].Value))
+            .Where(value => value is not null)
+            .Cast<string>()
+            .ToList();
+
+    private static List<(int Premium, int Economy)> ParseBookings(string text) =>
+        BookingRegex.Matches(Normalize(text))
+            .Select(m => (
+                Premium: int.Parse(m.Groups["premium"].Value),
+                Economy: int.Parse(m.Groups["economy"].Value)))
+            .ToList();
 
     private static List<string> ParseAirports(string text)
     {
