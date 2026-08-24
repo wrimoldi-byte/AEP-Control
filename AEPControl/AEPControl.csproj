@@ -11,8 +11,8 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <AssemblyName>AEPControl</AssemblyName>
-    <Version>2.17.0</Version>
-    <FileVersion>2.17.0.0</FileVersion>
-    <AssemblyVersion>2.17.0.0</AssemblyVersion>
+    <Version>2.18.0</Version>
+    <FileVersion>2.18.0.0</FileVersion>
+    <AssemblyVersion>2.18.0.0</AssemblyVersion>
   </PropertyGroup>
 </Project>

@@ -4,9 +4,10 @@ namespace AEPControl;
 
 public sealed class BubbleMainForm : Form
 {
-    private readonly BindingList<FlightData> _flights = new();
-    private readonly List<FlightData> _batch = new();
-    private readonly DataGridView _grid = new();
+    private readonly BindingList<FlightData> _arrivals = new();
+    private readonly BindingList<FlightData> _departures = new();
+    private readonly DataGridView _arrivalGrid = new();
+    private readonly DataGridView _departureGrid = new();
     private readonly Label _title = new();
     private readonly Label _help = new();
     private readonly Label _status = new();
@@ -15,14 +16,13 @@ public sealed class BubbleMainForm : Form
     private readonly Button _readDepartures = new();
     private readonly Button _export = new();
     private int _stage;
-    private int _index = -1;
-    private bool _chooseStartFromSelection;
+    private FlightData? _activeFlight;
     private CancellationTokenSource? _cts;
     private BubbleForm? _bubble;
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v2.17";
+        Text = "AEP Control v2.18";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1280, 720);
         TopMost = true;
@@ -71,27 +71,47 @@ public sealed class BubbleMainForm : Form
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 62, Padding = new Padding(12, 8, 12, 4) };
         bar.Controls.AddRange(new Control[] { _readArrivals, _readDepartures, _action, readDocuments, _export, configuration, reset, _status });
 
-        _grid.Dock = DockStyle.Fill;
-        _grid.AutoGenerateColumns = false;
-        _grid.DataSource = _flights;
-        _grid.AllowUserToAddRows = false;
-        _grid.RowHeadersVisible = false;
-        _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-        _grid.MultiSelect = false;
-        _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
-        AddColumn("Tipo", nameof(FlightData.Movimiento));
-        AddColumn("Vuelo", nameof(FlightData.Vuelo));
-        AddColumn("Origen / Destino", nameof(FlightData.Destino));
-        AddColumn("Hora", nameof(FlightData.Hora));
-        AddColumn("Booking", nameof(FlightData.Booking));
-        AddColumn("Equipo", nameof(FlightData.Equipo));
-        AddColumn("EDITS", nameof(FlightData.Edits));
+        ConfigureFlightGrid(_arrivalGrid, _arrivals, "Origen", "Hora llegada");
+        ConfigureFlightGrid(_departureGrid, _departures, "Destino", "Hora salida");
 
-        Controls.AddRange(new Control[] { _grid, bar, _help, _title });
+        _arrivalGrid.Enter += (_, _) => _departureGrid.ClearSelection();
+        _departureGrid.Enter += (_, _) => _arrivalGrid.ClearSelection();
+        _arrivalGrid.SelectionChanged += (_, _) => UpdateSelectedFlightStatus();
+        _departureGrid.SelectionChanged += (_, _) => UpdateSelectedFlightStatus();
+        _arrivalGrid.CellDoubleClick += async (_, e) => { if (e.RowIndex >= 0) await StartBubbleAsync(); };
+        _departureGrid.CellDoubleClick += async (_, e) => { if (e.RowIndex >= 0) await StartBubbleAsync(); };
+
+        var arrivalBox = new GroupBox { Text = "LLEGADAS", Dock = DockStyle.Fill, Padding = new Padding(8) };
+        arrivalBox.Controls.Add(_arrivalGrid);
+        var departureBox = new GroupBox { Text = "SALIDAS", Dock = DockStyle.Fill, Padding = new Padding(8) };
+        departureBox.Controls.Add(_departureGrid);
+        var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical };
+        split.Panel1.Controls.Add(arrivalBox);
+        split.Panel2.Controls.Add(departureBox);
+        Shown += (_, _) => split.SplitterDistance = Math.Max(300, split.ClientSize.Width / 2);
+
+        Controls.AddRange(new Control[] { split, bar, _help, _title });
         ResetFlow();
     }
 
-    private void AddColumn(string text, string property) => _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = text, DataPropertyName = property });
+    private static void ConfigureFlightGrid(DataGridView grid, object source, string airportTitle, string timeTitle)
+    {
+        grid.Dock = DockStyle.Fill;
+        grid.AutoGenerateColumns = false;
+        grid.DataSource = source;
+        grid.AllowUserToAddRows = false;
+        grid.RowHeadersVisible = false;
+        grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        grid.MultiSelect = false;
+        grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Vuelo", DataPropertyName = nameof(FlightData.Vuelo) });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = airportTitle, DataPropertyName = nameof(FlightData.Destino) });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = timeTitle, DataPropertyName = nameof(FlightData.Hora) });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Booking", DataPropertyName = nameof(FlightData.Booking) });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "EDITS", DataPropertyName = nameof(FlightData.Edits) });
+    }
+
+    private IEnumerable<FlightData> AllFlights() => _arrivals.Concat(_departures);
 
     private void OpenConfiguration()
     {
@@ -104,11 +124,10 @@ public sealed class BubbleMainForm : Form
     {
         _cts?.Cancel();
         _bubble?.Close();
-        _flights.Clear();
-        _batch.Clear();
+        _arrivals.Clear();
+        _departures.Clear();
         _stage = 0;
-        _index = -1;
-        _chooseStartFromSelection = false;
+        _activeFlight = null;
         _readArrivals.Visible = true;
         _readDepartures.Visible = true;
         _action.Visible = false;
@@ -121,9 +140,7 @@ public sealed class BubbleMainForm : Form
 
     private async Task ActAsync()
     {
-        if (_stage == 0) await ScanFlightsAsync("Llegada");
-        else if (_stage == 1) await ScanFlightsAsync("Salida");
-        else if (_stage == 2) await StartBubbleAsync();
+        await StartBubbleAsync();
     }
 
     private async Task ScanFlightsAsync(string movement)
@@ -131,7 +148,7 @@ public sealed class BubbleMainForm : Form
         Hide();
         await Task.Delay(250);
         using var selector = new SelectionForm();
-        if (selector.ShowDialog() != DialogResult.OK) { Show(); return; }
+        if (selector.ShowDialog() != DialogResult.OK) { _activeFlight = null; Show(); return; }
 
         var area = selector.SelectedArea;
         var unique = new Dictionary<string, FlightData>(StringComparer.OrdinalIgnoreCase);
@@ -207,109 +224,91 @@ public sealed class BubbleMainForm : Form
             Activate();
         }
 
-        if (unique.Count == 0)
+        var usableFlights = movement.Equals("Llegada", StringComparison.OrdinalIgnoreCase)
+            ? unique.Values.Where(f => !string.IsNullOrWhiteSpace(f.Hora) && f.BookingKnown).ToList()
+            : unique.Values.ToList();
+
+        if (usableFlights.Count == 0)
         {
-            _status.Text = "No detecté vuelos. Marcá sólo la grilla, desde los encabezados hasta la última fila visible.";
+            _status.Text = movement.Equals("Llegada", StringComparison.OrdinalIgnoreCase)
+                ? "No detecté llegadas completas con hora y booking. Marcá la grilla incluyendo ambas columnas."
+                : "No detecté vuelos. Marcá sólo la grilla, desde los encabezados hasta la última fila visible.";
             return;
         }
 
-        // Permite repetir una lectura sin duplicar el movimiento ya cargado.
-        for (var i = _flights.Count - 1; i >= 0; i--)
-            if (_flights[i].Movimiento.Equals(movement, StringComparison.OrdinalIgnoreCase))
-                _flights.RemoveAt(i);
+        var target = movement.Equals("Llegada", StringComparison.OrdinalIgnoreCase)
+            ? _arrivals
+            : _departures;
+        target.Clear();
 
-        foreach (var flight in unique.Values.OrderBy(x => x.Hora).ThenBy(x => x.Vuelo))
-            _flights.Add(flight);
+        foreach (var flight in usableFlights.OrderBy(x => x.Hora).ThenBy(x => x.Vuelo))
+            target.Add(flight);
 
-        _export.Enabled = _flights.Count > 0;
+        _export.Enabled = AllFlights().Any();
+        _action.Visible = true;
+        _action.Text = "Leer EDITS del vuelo seleccionado";
 
         if (movement.Equals("Llegada", StringComparison.OrdinalIgnoreCase))
         {
-            _stage = 1;
+            _stage = 2;
             _title.Text = "Paso 2 — Vuelos de salida";
             _help.Text = "Llegadas guardadas. Abrí la grilla de salidas y presioná el botón fijo «Leer salidas».";
-            _status.Text = $"Llegadas guardadas: {unique.Count} vuelos. Botón «Leer salidas» disponible arriba.";
+            _status.Text = $"Llegadas guardadas con hora y booking: {usableFlights.Count}. Botón «Leer salidas» disponible arriba.";
             return;
         }
 
-        BuildSpecialBatch();
+        PrepareSpecialSelection();
     }
 
-    private void BuildSpecialBatch()
+    private void PrepareSpecialSelection()
     {
-        _batch.Clear();
-        foreach (var flight in _flights
-            .OrderBy(f => f.Movimiento.Equals("Llegada", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-            .ThenBy(f => f.Hora)
-            .ThenBy(f => f.Vuelo))
-        {
-            _batch.Add(flight);
-        }
-
-        if (_batch.Count == 0)
+        if (!AllFlights().Any())
         {
             _status.Text = "No hay vuelos para leer especiales.";
             return;
         }
 
         _stage = 2;
-        _index = 0;
-        _chooseStartFromSelection = true;
         _action.Visible = true;
         _title.Text = "Paso 3 — Especiales de llegadas y salidas";
-        _help.Text = "Ya están cargadas llegadas y salidas. Seleccioná desde qué vuelo querés comenzar; se leerán los mismos EDITS para ambos tipos de vuelo.";
-        _action.Text = "Iniciar especiales desde vuelo seleccionado";
-        _status.Text = $"Listas completas: {_flights.Count(f => f.Movimiento == "Llegada")} llegadas + {_flights.Count(f => f.Movimiento == "Salida")} salidas.";
+        _help.Text = "Elegí cualquier vuelo de Llegadas o Salidas. El botón leerá exactamente el vuelo seleccionado, sin importar el orden. También podés hacer doble clic.";
+        _action.Text = "Leer EDITS del vuelo seleccionado";
+        _status.Text = $"Listas completas: {_arrivals.Count} llegadas + {_departures.Count} salidas.";
     }
 
-    private void PrepareFlight()
+    private FlightData? GetSelectedFlight()
     {
-        var f = _batch[_index];
-        _title.Text = $"{f.Movimiento}: {f.Vuelo}";
-        _help.Text = $"Entrá al vuelo {f.Vuelo}, escribí SS y abrí SusEdit. Tocá el botón y marcá la lista. La ventana se convertirá en una burbuja flotante.";
-        _action.Text = $"Iniciar burbuja OCR de {f.Vuelo}";
-        _status.Text = $"Vuelo {_index + 1} de {_batch.Count}.";
-
-        var rowIndex = _flights.IndexOf(f);
-        if (rowIndex >= 0)
-        {
-            _grid.ClearSelection();
-            _grid.Rows[rowIndex].Selected = true;
-            _grid.CurrentCell = _grid.Rows[rowIndex].Cells[0];
-            if (rowIndex < _grid.RowCount)
-                _grid.FirstDisplayedScrollingRowIndex = rowIndex;
-        }
+        if (_arrivalGrid.Focused && _arrivalGrid.CurrentRow?.DataBoundItem is FlightData arrival)
+            return arrival;
+        if (_departureGrid.Focused && _departureGrid.CurrentRow?.DataBoundItem is FlightData departure)
+            return departure;
+        if (_arrivalGrid.SelectedRows.Count > 0)
+            return _arrivalGrid.SelectedRows[0].DataBoundItem as FlightData;
+        if (_departureGrid.SelectedRows.Count > 0)
+            return _departureGrid.SelectedRows[0].DataBoundItem as FlightData;
+        return null;
     }
 
-    private void ApplySelectedStartFlight()
+    private void UpdateSelectedFlightStatus()
     {
-        if (!_chooseStartFromSelection) return;
-
-        var selected = _grid.SelectedRows.Count > 0
-            ? _grid.SelectedRows[0].DataBoundItem as FlightData
-            : _grid.CurrentRow?.DataBoundItem as FlightData;
-
+        var selected = GetSelectedFlight();
         if (selected is not null)
-        {
-            var selectedIndex = _batch.IndexOf(selected);
-            if (selectedIndex >= 0)
-                _index = selectedIndex;
-        }
-
-        _chooseStartFromSelection = false;
-        PrepareFlight();
+            _status.Text = $"Seleccionado: {selected.Movimiento} {selected.Vuelo}.";
     }
 
     private async Task StartBubbleAsync()
     {
-        ApplySelectedStartFlight();
-        if (_index < 0 || _index >= _batch.Count) return;
-
-        var f = _batch[_index];
+        var f = GetSelectedFlight();
+        if (f is null)
+        {
+            MessageBox.Show("Seleccioná primero un vuelo de Llegadas o Salidas.", "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        _activeFlight = f;
         Hide();
         await Task.Delay(250);
         using var selector = new SelectionForm();
-        if (selector.ShowDialog() != DialogResult.OK) { Show(); return; }
+        if (selector.ShowDialog() != DialogResult.OK) { _activeFlight = null; Show(); return; }
 
         var area = selector.SelectedArea;
         var reader = new ContinuousSpecialReader();
@@ -330,7 +329,8 @@ public sealed class BubbleMainForm : Form
                 {
                     var c = reader.AddOcrText(text);
                     CopyCounts(f, c);
-                    _grid.Refresh();
+                    _arrivalGrid.Refresh();
+                    _departureGrid.Refresh();
                 }
 
                 _bubble.UpdateCounts(f, reader.UniqueRows);
@@ -362,25 +362,22 @@ public sealed class BubbleMainForm : Form
         _cts?.Cancel();
         _bubble?.Close();
         _bubble = null;
-        _batch[_index].EspecialesLeidos = true;
-        _export.Enabled = _flights.Count > 0;
-
-        if (++_index < _batch.Count)
-        {
-            Show(); Activate(); PrepareFlight(); return;
-        }
-
+        if (_activeFlight is not null)
+            _activeFlight.EspecialesLeidos = true;
+        _export.Enabled = AllFlights().Any();
         Show(); Activate();
-        _stage = 3;
-        _title.Text = "Proceso completado";
-        _help.Text = "Llegadas y salidas quedaron cargadas con sus EDITS especiales. Ya podés exportar al Excel operativo.";
-        _action.Visible = false;
-        _status.Text = "Lectura terminada.";
+        _stage = 2;
+        _title.Text = "Especiales — elegí el próximo vuelo";
+        _help.Text = "Podés seleccionar ahora cualquier otro vuelo de cualquiera de las dos listas, sin seguir un orden obligatorio.";
+        _action.Visible = true;
+        _action.Text = "Leer EDITS del vuelo seleccionado";
+        _status.Text = _activeFlight is null ? "Lectura terminada." : $"{_activeFlight.Vuelo} terminado.";
+        _activeFlight = null;
     }
 
     private void ExportExcel()
     {
-        if (_flights.Count == 0)
+        if (!AllFlights().Any())
         {
             MessageBox.Show("Todavía no hay vuelos para exportar.", "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
@@ -399,7 +396,7 @@ public sealed class BubbleMainForm : Form
 
         try
         {
-            ExcelExporter.Export(dialog.FileName, _flights.ToList());
+            ExcelExporter.Export(dialog.FileName, AllFlights().ToList());
             _status.Text = $"Excel guardado: {Path.GetFileName(dialog.FileName)}";
             MessageBox.Show("Excel generado correctamente. Los datos no disponibles quedaron vacíos.", "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
