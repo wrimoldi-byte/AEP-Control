@@ -11,6 +11,10 @@ public sealed class ConfigurationForm : Form
         Size = new Size(520, 590);
         MinimizeBox = false;
         MaximizeBox = false;
+        ShowInTaskbar = false;
+        TopMost = true;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        BackColor = Color.FromArgb(239, 247, 251);
 
         var title = new Label
         {
@@ -35,6 +39,8 @@ public sealed class ConfigurationForm : Form
         _codes.Font = new Font("Consolas", 11);
         _codes.AcceptsReturn = true;
         _codes.WordWrap = false;
+        _codes.MaxLength = 10000;
+        _codes.BorderStyle = BorderStyle.FixedSingle;
         _codes.Text = string.Join(Environment.NewLine, SpecialCodeSettings.Load().Codes);
 
         var save = new Button { Text = "Guardar", AutoSize = true, Padding = new Padding(12, 6, 12, 6) };
@@ -56,11 +62,30 @@ public sealed class ConfigurationForm : Form
         bar.Controls.Add(cancel);
         bar.Controls.Add(save);
         bar.Controls.Add(restore);
+        bar.BackColor = Color.FromArgb(225, 239, 247);
+
+        save.FlatStyle = FlatStyle.Flat;
+        save.FlatAppearance.BorderSize = 0;
+        save.BackColor = Color.FromArgb(31, 91, 132);
+        save.ForeColor = Color.White;
+        restore.FlatStyle = FlatStyle.Flat;
+        restore.BackColor = Color.FromArgb(82, 102, 117);
+        restore.ForeColor = Color.White;
 
         Controls.Add(_codes);
         Controls.Add(bar);
         Controls.Add(help);
         Controls.Add(title);
+
+        AcceptButton = save;
+        CancelButton = cancel;
+        Shown += (_, _) =>
+        {
+            BringToFront();
+            Activate();
+            _codes.Focus();
+            _codes.SelectionStart = _codes.TextLength;
+        };
     }
 
     private void SaveAndClose()
@@ -73,7 +98,7 @@ public sealed class ConfigurationForm : Form
         var normalized = SpecialCodeSettings.Normalize(raw);
         if (normalized.Count == 0)
         {
-            MessageBox.Show("Tiene que quedar al menos un código válido.", "Configuración", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(this, "Tiene que quedar al menos un código válido.", "Configuración", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 

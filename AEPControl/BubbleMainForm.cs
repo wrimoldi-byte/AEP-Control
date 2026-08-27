@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Reflection;
 
 namespace AEPControl;
 
@@ -16,6 +17,7 @@ public sealed class BubbleMainForm : Form
     private readonly Button _readDepartures = new();
     private readonly Button _readDepartureOperation = new();
     private readonly Button _export = new();
+    private readonly Image? _backgroundImage;
     private int _stage;
     private FlightData? _activeFlight;
     private CancellationTokenSource? _cts;
@@ -23,19 +25,28 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v2.23";
+        Text = "AEP Control v2.24";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1280, 720);
         TopMost = true;
+        DoubleBuffered = true;
+        BackColor = Color.FromArgb(18, 42, 70);
+        _backgroundImage = LoadBackgroundImage();
+        BackgroundImage = _backgroundImage;
+        BackgroundImageLayout = ImageLayout.Stretch;
 
         _title.Dock = DockStyle.Top;
         _title.Height = 48;
         _title.Font = new Font("Segoe UI", 16, FontStyle.Bold);
         _title.Padding = new Padding(14, 10, 0, 0);
+        _title.ForeColor = Color.White;
+        _title.BackColor = Color.Transparent;
 
         _help.Dock = DockStyle.Top;
         _help.Height = 68;
         _help.Padding = new Padding(14, 8, 14, 0);
+        _help.ForeColor = Color.White;
+        _help.BackColor = Color.Transparent;
 
         _action.AutoSize = true;
         _action.Padding = new Padding(12, 7, 12, 7);
@@ -75,8 +86,10 @@ public sealed class BubbleMainForm : Form
         _status.AutoSize = true;
         _status.Padding = new Padding(12, 11, 0, 0);
 
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 96, Padding = new Padding(12, 8, 12, 4), AutoScroll = true, WrapContents = true };
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 96, Padding = new Padding(12, 8, 12, 4), AutoScroll = true, WrapContents = true, BackColor = Color.FromArgb(232, 243, 249) };
         bar.Controls.AddRange(new Control[] { _readArrivals, _readDepartures, _readDepartureOperation, _action, readDocuments, _export, configuration, reset, _status });
+        StyleToolbar(bar, reset);
+        _readDepartureOperation.BackColor = Color.FromArgb(137, 37, 103);
 
         ConfigureFlightGrid(_arrivalGrid, _arrivals, "Origen", "Hora llegada", includeDepartureOperation: false);
         ConfigureFlightGrid(_departureGrid, _departures, "Destino", "Hora salida", includeDepartureOperation: true);
@@ -88,16 +101,26 @@ public sealed class BubbleMainForm : Form
         _arrivalGrid.CellDoubleClick += async (_, e) => { if (e.RowIndex >= 0) await StartBubbleAsync(); };
         _departureGrid.CellDoubleClick += async (_, e) => { if (e.RowIndex >= 0) await StartBubbleAsync(); };
 
-        var arrivalBox = new GroupBox { Text = "LLEGADAS", Dock = DockStyle.Fill, Padding = new Padding(8) };
+        var arrivalBox = new GroupBox { Text = "LLEGADAS", Dock = DockStyle.Fill, Padding = new Padding(8), BackColor = Color.FromArgb(239, 247, 251), ForeColor = Color.FromArgb(18, 57, 91), Font = new Font("Segoe UI", 9, FontStyle.Bold) };
         arrivalBox.Controls.Add(_arrivalGrid);
-        var departureBox = new GroupBox { Text = "SALIDAS", Dock = DockStyle.Fill, Padding = new Padding(8) };
+        var departureBox = new GroupBox { Text = "SALIDAS", Dock = DockStyle.Fill, Padding = new Padding(8), BackColor = Color.FromArgb(239, 247, 251), ForeColor = Color.FromArgb(18, 57, 91), Font = new Font("Segoe UI", 9, FontStyle.Bold) };
         departureBox.Controls.Add(_departureGrid);
-        var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical };
+        var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterWidth = 6, BackColor = Color.FromArgb(35, 91, 126) };
         split.Panel1.Controls.Add(arrivalBox);
         split.Panel2.Controls.Add(departureBox);
         Shown += (_, _) => split.SplitterDistance = Math.Max(300, split.ClientSize.Width / 2);
 
-        Controls.AddRange(new Control[] { split, bar, _help, _title });
+        var hero = new CoverImagePanel { Dock = DockStyle.Top, Height = 150, HeroImage = _backgroundImage, VerticalFocus = 0.30f };
+        hero.Controls.Add(_help);
+        hero.Controls.Add(_title);
+
+        Controls.AddRange(new Control[] { split, bar, hero });
+        FormClosed += (_, _) =>
+        {
+            BackgroundImage = null;
+            hero.HeroImage = null;
+            _backgroundImage?.Dispose();
+        };
         ResetFlow();
     }
 
@@ -111,6 +134,17 @@ public sealed class BubbleMainForm : Form
         grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
         grid.MultiSelect = false;
         grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        grid.EnableHeadersVisualStyles = false;
+        grid.BackgroundColor = Color.White;
+        grid.BorderStyle = BorderStyle.None;
+        grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(32, 91, 132);
+        grid.ColumnHeadersDefaultCellStyle.ForeColor = Color.White;
+        grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 8.5f, FontStyle.Bold);
+        grid.DefaultCellStyle.BackColor = Color.White;
+        grid.DefaultCellStyle.ForeColor = Color.FromArgb(24, 48, 71);
+        grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(137, 37, 103);
+        grid.DefaultCellStyle.SelectionForeColor = Color.White;
+        grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(237, 246, 251);
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Vuelo", DataPropertyName = nameof(FlightData.Vuelo) });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = airportTitle, DataPropertyName = nameof(FlightData.Destino) });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = timeTitle, DataPropertyName = nameof(FlightData.Hora) });
@@ -128,9 +162,44 @@ public sealed class BubbleMainForm : Form
 
     private void OpenConfiguration()
     {
-        using var form = new ConfigurationForm();
-        if (form.ShowDialog(this) == DialogResult.OK)
-            _status.Text = "Configuración guardada. Los nuevos códigos se usarán en la próxima lectura de especiales.";
+        var wasTopMost = TopMost;
+        try
+        {
+            TopMost = false;
+            using var form = new ConfigurationForm();
+            if (form.ShowDialog(this) == DialogResult.OK)
+                _status.Text = "Configuración guardada. Los nuevos códigos se usarán en la próxima lectura de especiales.";
+        }
+        finally
+        {
+            TopMost = wasTopMost;
+            BringToFront();
+            Activate();
+        }
+    }
+
+    private static void StyleToolbar(FlowLayoutPanel bar, Button reset)
+    {
+        foreach (var button in bar.Controls.OfType<Button>())
+        {
+            button.FlatStyle = FlatStyle.Flat;
+            button.FlatAppearance.BorderSize = 0;
+            button.BackColor = Color.FromArgb(31, 91, 132);
+            button.ForeColor = Color.White;
+            button.Cursor = Cursors.Hand;
+            button.Font = new Font("Segoe UI", 9, FontStyle.Bold);
+        }
+
+        reset.BackColor = Color.FromArgb(82, 102, 117);
+    }
+
+    private static Image? LoadBackgroundImage()
+    {
+        using var stream = Assembly.GetExecutingAssembly()
+            .GetManifestResourceStream("AEPControl.Assets.aep-ocean-latam.png");
+        if (stream is null) return null;
+        using var source = Image.FromStream(stream);
+        return new Bitmap(source);
     }
 
     private void ResetFlow()
