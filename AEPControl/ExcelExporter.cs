@@ -62,7 +62,9 @@ public static class ExcelExporter
         WriteCol(xw, 6, 6, 14);
         WriteCol(xw, 7, 7, 10);
         WriteCol(xw, 8, 10, 12);
-        WriteCol(xw, 11, 13, 10);
+        WriteCol(xw, 11, 11, 11);
+        WriteCol(xw, 12, 12, 22);
+        WriteCol(xw, 13, 13, 8);
         WriteCol(xw, 14, 14, 30);
         WriteCol(xw, 15, 18, 10);
         xw.WriteEndElement();
@@ -113,13 +115,11 @@ public static class ExcelExporter
                 var f = departures[i];
                 WriteCell(xw, $"F{row}", FlightLabel(f), 4);
                 WriteCellOrDash(xw, $"G{row}", f.Hora, 7);
-                // H/I/J quedan disponibles para MATRÍCULA, ABE y CONF cuando incorporemos esas lecturas.
-                WriteCellOrDash(xw, $"H{row}", string.Empty, bodyStyle);
+                WriteCellOrDash(xw, $"H{row}", f.Matricula, bodyStyle);
                 WriteCellOrDash(xw, $"I{row}", string.Empty, bodyStyle);
-                WriteCellOrDash(xw, $"J{row}", string.Empty, bodyStyle);
+                WriteCellOrDash(xw, $"J{row}", f.Configuracion, bodyStyle);
                 WriteCellOrDash(xw, $"K{row}", f.Booking, bodyStyle);
-                // L (SVCS) queda disponible para la lectura general de servicios.
-                WriteCellOrDash(xw, $"L{row}", string.Empty, bodyStyle);
+                WriteCellOrDash(xw, $"L{row}", f.Servicios, bodyStyle);
                 WriteNumberOrDash(xw, $"M{row}", f.INF, f.EspecialesLeidos, bodyStyle);
                 WriteCellOrDash(xw, $"N{row}", SpecialText(f, excludeDedicated: true), 9);
                 WriteCellOrDash(xw, $"O{row}", string.Empty, bodyStyle);

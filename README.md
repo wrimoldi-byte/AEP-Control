@@ -1,4 +1,4 @@
-# AEP Control v2.20
+# AEP Control v2.21
 
 Prototipo portátil para Windows que lee por OCR la tabla de vuelos del siguiente turno.
 
@@ -22,7 +22,14 @@ Entrar en **Actions**, abrir la ejecución más reciente y descargar el artefact
 
 Esta versión es una prueba inicial. El resultado debe revisarse antes de utilizarlo operativamente.
 
-## Cambios de v2.20
+## Cambios de v2.21
+
+- Nuevo botón **Leer datos de salida**: captura el cuadro operativo y lo relaciona con el vuelo por número.
+- El OCR extrae **matrícula**, **configuración de aeronave** y los servicios `HLDL`, `HLDR`, `SPMLJ` y `SPMLY`.
+- Los datos se exportan en las columnas **MATRÍCULA**, **CONF** y **SVCS** de la misma fila de salida.
+- Los servicios con valor cero no recargan la planilla; si todos están en cero se informa `SIN SERVICIOS`.
+
+## Mejoras conservadas de v2.20
 
 - El Excel conserva PAX como `PE/Economy` (por ejemplo `7/14`) y ya no suma ambas cabinas.
 - La lectura continua de EDITS reconoce `INF` y `ETO` y los exporta en sus columnas dedicadas.

@@ -14,6 +14,7 @@ public sealed class BubbleMainForm : Form
     private readonly Button _action = new();
     private readonly Button _readArrivals = new();
     private readonly Button _readDepartures = new();
+    private readonly Button _readDepartureOperation = new();
     private readonly Button _export = new();
     private int _stage;
     private FlightData? _activeFlight;
@@ -22,7 +23,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v2.19";
+        Text = "AEP Control v2.21";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1280, 720);
         TopMost = true;
@@ -50,6 +51,12 @@ public sealed class BubbleMainForm : Form
         _readDepartures.Padding = new Padding(12, 7, 12, 7);
         _readDepartures.Click += async (_, _) => await ScanFlightsAsync("Salida");
 
+        _readDepartureOperation.Text = "Leer datos de salida";
+        _readDepartureOperation.AutoSize = true;
+        _readDepartureOperation.Padding = new Padding(12, 7, 12, 7);
+        _readDepartureOperation.Enabled = false;
+        _readDepartureOperation.Click += async (_, _) => await ReadDepartureOperationAsync();
+
         _export.Text = "Exportar Excel";
         _export.AutoSize = true;
         _export.Padding = new Padding(10, 7, 10, 7);
@@ -68,11 +75,11 @@ public sealed class BubbleMainForm : Form
         _status.AutoSize = true;
         _status.Padding = new Padding(12, 11, 0, 0);
 
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 62, Padding = new Padding(12, 8, 12, 4) };
-        bar.Controls.AddRange(new Control[] { _readArrivals, _readDepartures, _action, readDocuments, _export, configuration, reset, _status });
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 96, Padding = new Padding(12, 8, 12, 4), AutoScroll = true, WrapContents = true };
+        bar.Controls.AddRange(new Control[] { _readArrivals, _readDepartures, _readDepartureOperation, _action, readDocuments, _export, configuration, reset, _status });
 
-        ConfigureFlightGrid(_arrivalGrid, _arrivals, "Origen", "Hora llegada");
-        ConfigureFlightGrid(_departureGrid, _departures, "Destino", "Hora salida");
+        ConfigureFlightGrid(_arrivalGrid, _arrivals, "Origen", "Hora llegada", includeDepartureOperation: false);
+        ConfigureFlightGrid(_departureGrid, _departures, "Destino", "Hora salida", includeDepartureOperation: true);
 
         _arrivalGrid.Enter += (_, _) => _departureGrid.ClearSelection();
         _departureGrid.Enter += (_, _) => _arrivalGrid.ClearSelection();
@@ -94,7 +101,7 @@ public sealed class BubbleMainForm : Form
         ResetFlow();
     }
 
-    private static void ConfigureFlightGrid(DataGridView grid, object source, string airportTitle, string timeTitle)
+    private static void ConfigureFlightGrid(DataGridView grid, object source, string airportTitle, string timeTitle, bool includeDepartureOperation)
     {
         grid.Dock = DockStyle.Fill;
         grid.AutoGenerateColumns = false;
@@ -108,6 +115,12 @@ public sealed class BubbleMainForm : Form
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = airportTitle, DataPropertyName = nameof(FlightData.Destino) });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = timeTitle, DataPropertyName = nameof(FlightData.Hora) });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Booking", DataPropertyName = nameof(FlightData.Booking) });
+        if (includeDepartureOperation)
+        {
+            grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Matrícula", DataPropertyName = nameof(FlightData.Matricula) });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Config.", DataPropertyName = nameof(FlightData.Configuracion) });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "SVCS", DataPropertyName = nameof(FlightData.Servicios) });
+        }
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "EDITS", DataPropertyName = nameof(FlightData.Edits) });
     }
 
@@ -130,6 +143,7 @@ public sealed class BubbleMainForm : Form
         _activeFlight = null;
         _readArrivals.Visible = true;
         _readDepartures.Visible = true;
+        _readDepartureOperation.Enabled = false;
         _action.Visible = false;
         _export.Enabled = false;
         _title.Text = "Paso 1 — Vuelos de llegada";
@@ -257,8 +271,90 @@ public sealed class BubbleMainForm : Form
             return;
         }
 
+        _readDepartureOperation.Enabled = true;
+
         PrepareSpecialSelection();
     }
+
+    private async Task ReadDepartureOperationAsync()
+    {
+        if (_departures.Count == 0)
+        {
+            MessageBox.Show("Primero leé la lista de vuelos de salida.", "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        _status.Text = "Seleccioná el cuadro completo del vuelo de salida: vuelo, matrícula, configuración y servicios.";
+        Hide();
+        await Task.Delay(250);
+
+        using var selector = new SelectionForm();
+        if (selector.ShowDialog() != DialogResult.OK)
+        {
+            Show(); Activate(); _status.Text = "Lectura de datos de salida cancelada."; return;
+        }
+
+        try
+        {
+            using var bitmap = new Bitmap(selector.SelectedArea.Width, selector.SelectedArea.Height);
+            using (var graphics = Graphics.FromImage(bitmap))
+                graphics.CopyFromScreen(selector.SelectedArea.Location, Point.Empty, selector.SelectedArea.Size);
+
+            var text = await OcrService.ReadAsync(bitmap);
+            var data = DepartureOperationParser.Parse(text);
+            var selectedDeparture = _departureGrid.CurrentRow?.DataBoundItem as FlightData;
+            var target = FindDeparture(data.Vuelo);
+            if (target is null && string.IsNullOrWhiteSpace(data.Vuelo))
+                target = selectedDeparture;
+
+            if (target is null)
+            {
+                MessageBox.Show(
+                    "No pude relacionar la pantalla con un vuelo de salida. Seleccioná primero el vuelo en la grilla y repetí la captura.",
+                    "AEP Control",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (!data.HasOperationalData)
+            {
+                MessageBox.Show(
+                    "El OCR detectó la pantalla, pero no encontró matrícula, configuración ni servicios. Probá seleccionando el cuadro completo con un pequeño margen.",
+                    "AEP Control",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(data.Matricula)) target.Matricula = data.Matricula;
+            if (!string.IsNullOrWhiteSpace(data.Configuracion)) target.Configuracion = data.Configuracion;
+            if (!string.IsNullOrWhiteSpace(data.Servicios)) target.Servicios = data.Servicios;
+
+            _departureGrid.Refresh();
+            _export.Enabled = true;
+            _status.Text = $"{target.Vuelo}: matrícula {Display(target.Matricula)} · configuración {Display(target.Configuracion)} · SVCS {Display(target.Servicios)}.";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"No pude leer los datos del vuelo de salida:\n\n{ex.Message}", "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            Show();
+            Activate();
+        }
+    }
+
+    private FlightData? FindDeparture(string flight)
+    {
+        if (string.IsNullOrWhiteSpace(flight)) return null;
+        var digits = new string(flight.Where(char.IsDigit).ToArray());
+        return _departures.FirstOrDefault(item =>
+            new string(item.Vuelo.Where(char.IsDigit).ToArray()).Equals(digits, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string Display(string value) => string.IsNullOrWhiteSpace(value) ? "sin dato" : value;
 
     private void PrepareSpecialSelection()
     {
@@ -271,7 +367,7 @@ public sealed class BubbleMainForm : Form
         _stage = 2;
         _action.Visible = true;
         _title.Text = "Paso 3 — Especiales de llegadas y salidas";
-        _help.Text = "Elegí cualquier vuelo de Llegadas o Salidas. El botón leerá exactamente el vuelo seleccionado, sin importar el orden. También podés hacer doble clic.";
+        _help.Text = "En Salidas, usá Leer datos de salida para completar matrícula, configuración y SVCS. Para EDITS, elegí cualquier vuelo: se leerá exactamente el seleccionado, sin importar el orden.";
         _action.Text = "Leer EDITS del vuelo seleccionado";
         _status.Text = $"Listas completas: {_arrivals.Count} llegadas + {_departures.Count} salidas.";
     }
