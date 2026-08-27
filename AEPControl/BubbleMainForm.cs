@@ -347,7 +347,7 @@ public sealed class BubbleMainForm : Form
 
     private static void CopyCounts(FlightData f, SpecialCounts c)
     {
-        f.WCHR = c.WCHR; f.WCHS = c.WCHS; f.WCHC = c.WCHC; f.AVIH = c.AVIH; f.INF = c.INF;
+        f.WCHR = c.WCHR; f.WCHS = c.WCHS; f.WCHC = c.WCHC; f.AVIH = c.AVIH; f.INF = c.INF; f.ETO = c.ETO;
         f.UMNR = c.UMNR; f.PETC = c.PETC; f.DEAF = c.DEAF; f.BLND = c.BLND; f.MAAS = c.MAAS;
         f.STCR = c.STCR; f.MEDA = c.MEDA; f.WCLB = c.WCLB; f.WCMP = c.WCMP; f.SVAN = c.SVAN;
         f.ESAN = c.ESAN; f.INAD = c.INAD; f.DEPA = c.DEPA; f.DEPU = c.DEPU;

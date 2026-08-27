@@ -50,7 +50,7 @@ public sealed class BubbleForm : Form
         {
             BubbleMode.FlightList => "Vuelos únicos: 0\nHacé scroll lentamente",
             BubbleMode.PassengerDocuments => "Documentos únicos: 0\nOCR continuo · pasada 0",
-            _ => "WCHR 0 · WCHS 0 · WCHC 0\nAVIH 0 · INF 0\nOtros 0 · filas 0"
+            _ => "WCHR 0 · WCHS 0 · WCHC 0\nAVIH 0 · INF 0 · ETO 0\nOtros 0 · filas 0"
         };
 
         _finish.Text = mode switch
@@ -84,7 +84,7 @@ public sealed class BubbleForm : Form
         }
 
         _flight.Text = flight.Vuelo;
-        _counts.Text = $"WCHR {flight.WCHR} · WCHS {flight.WCHS} · WCHC {flight.WCHC}\nAVIH {flight.AVIH} · INF {flight.INF}\nOtros {flight.OtrosEspecialesTotal} · filas {uniqueRows}";
+        _counts.Text = $"WCHR {flight.WCHR} · WCHS {flight.WCHS} · WCHC {flight.WCHC}\nAVIH {flight.AVIH} · INF {flight.INF} · ETO {flight.ETO}\nOtros {flight.OtrosEspecialesTotal} · filas {uniqueRows}";
     }
 
     public void UpdateFlightCount(int count)

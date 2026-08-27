@@ -96,6 +96,7 @@ public sealed class MainForm : Form
         _grid.Columns.Add(Column("WCHC", nameof(FlightData.WCHC), 50));
         _grid.Columns.Add(Column("AVIH", nameof(FlightData.AVIH), 50));
         _grid.Columns.Add(Column("INF", nameof(FlightData.INF), 45));
+        _grid.Columns.Add(Column("ETO", nameof(FlightData.ETO), 45));
     }
 
     private static DataGridViewTextBoxColumn Column(string title, string property, float weight) => new()
@@ -175,7 +176,7 @@ public sealed class MainForm : Form
 
         var movement = flight.Movimiento.ToLowerInvariant();
         _stepTitle.Text = $"Especiales de {movement} — {flight.Vuelo}";
-        _instruction.Text = $"Entrá al vuelo {flight.Vuelo} en Sabre, escribí SS y abrí SusEdit. Tocá Iniciar, marcá una sola vez la zona de la lista y después desplazate lentamente hacia abajo. La app leerá WCHR, WCHS, WCHC, AVIH e INF sin repetir filas.";
+        _instruction.Text = $"Entrá al vuelo {flight.Vuelo} en Sabre, escribí SS y abrí SusEdit. Tocá Iniciar, marcá una sola vez la zona de la lista y después desplazate lentamente hacia abajo. La app leerá WCHR, WCHS, WCHC, AVIH, INF y ETO sin repetir filas.";
         _primaryButton.Text = $"Iniciar lectura continua de {flight.Vuelo}";
         _status.Text = $"Vuelo {_activeFlightIndex + 1} de {_currentBatch.Count}.";
     }
@@ -219,8 +220,9 @@ public sealed class MainForm : Form
                 flight.WCHC = counts.WCHC;
                 flight.AVIH = counts.AVIH;
                 flight.INF = counts.INF;
+                flight.ETO = counts.ETO;
                 _grid.Refresh();
-                _status.Text = $"{flight.Vuelo} — filas únicas {_continuousReader.UniqueRows} | WCHR {flight.WCHR} · WCHS {flight.WCHS} · WCHC {flight.WCHC} · AVIH {flight.AVIH} · INF {flight.INF}";
+                _status.Text = $"{flight.Vuelo} — filas únicas {_continuousReader.UniqueRows} | WCHR {flight.WCHR} · WCHS {flight.WCHS} · WCHC {flight.WCHC} · AVIH {flight.AVIH} · INF {flight.INF} · ETO {flight.ETO}";
 
                 await Task.Delay(700, _continuousCts.Token);
             }
@@ -261,7 +263,7 @@ public sealed class MainForm : Form
         {
             _stage = WorkflowStage.Finished;
             _stepTitle.Text = "Llegadas y salidas completadas";
-            _instruction.Text = "Se leyeron los vuelos de llegada y salida, con sus cantidades de WCHR, WCHS, WCHC, AVIH e INF. Revisá la tabla antes de continuar con nuevos edits.";
+            _instruction.Text = "Se leyeron los vuelos de llegada y salida, con sus cantidades de WCHR, WCHS, WCHC, AVIH, INF y ETO. Revisá la tabla antes de continuar con nuevos edits.";
             _primaryButton.Visible = false;
             _status.Text = "Proceso inicial terminado.";
         }

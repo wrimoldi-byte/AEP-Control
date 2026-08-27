@@ -18,7 +18,8 @@ public static class SpecialParser
             WCHS = CountCode(normalized, "WCHS"),
             WCHC = CountCode(normalized, "WCHC"),
             AVIH = CountCode(normalized, "AVIH") + CountCode(normalized, "AVI"),
-            INF = CountCode(normalized, "INF")
+            INF = CountCode(normalized, "INF"),
+            ETO = CountCode(normalized, "ETO")
         };
     }
 }

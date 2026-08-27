@@ -39,25 +39,25 @@ jobs:
       - name: Compilar ejecutable
         run: dotnet publish AEPControl/AEPControl.csproj --configuration Release --runtime win-x64 --self-contained true --output publish -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 
-      - name: Subir AEP Control v2.19 como artifact
+      - name: Subir AEP Control v2.20 como artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AEP-Control-v2.19-win-x64
+          name: AEP-Control-v2.20-win-x64
           path: publish/AEPControl.exe
           if-no-files-found: error
           retention-days: 30
 
-      - name: Crear o actualizar Release v2.19
+      - name: Crear o actualizar Release v2.20
         if: github.event_name != 'pull_request'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "v2.19"
+          $tag = "v2.20"
           $asset = "publish/AEPControl.exe"
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.19" --notes "AEP Control v2.19 - doble lectura OCR de salidas para recuperar la primera fila pegada al borde."
+            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.20" --notes "Excel profesional, PAX separado como PE/Economy y lectura de INF/ETO desde EDITS."
           } else {
             gh release upload $tag $asset --repo $env:GITHUB_REPOSITORY --clobber
           }

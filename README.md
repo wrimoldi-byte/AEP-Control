@@ -1,4 +1,4 @@
-# AEP Control v0.1
+# AEP Control v2.20
 
 Prototipo portátil para Windows que lee por OCR la tabla de vuelos del siguiente turno.
 
@@ -21,3 +21,9 @@ Entrar en **Actions**, abrir la ejecución más reciente y descargar el artefact
 - Algún idioma de reconocimiento óptico instalado en Windows.
 
 Esta versión es una prueba inicial. El resultado debe revisarse antes de utilizarlo operativamente.
+
+## Cambios de v2.20
+
+- El Excel conserva PAX como `PE/Economy` (por ejemplo `7/14`) y ya no suma ambas cabinas.
+- La lectura continua de EDITS reconoce `INF` y `ETO` y los exporta en sus columnas dedicadas.
+- El Excel usa un formato operativo profesional con bloques separados de arribos y salidas, encabezados jerarquizados, filas alternadas, ETD destacado y panel congelado.

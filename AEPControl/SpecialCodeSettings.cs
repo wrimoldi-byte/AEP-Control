@@ -9,7 +9,7 @@ public sealed class SpecialCodeSettings
 
     public static readonly string[] DefaultCodes =
     {
-        "WCHR", "WCHS", "WCHC", "AVIH", "INF",
+        "WCHR", "WCHS", "WCHC", "AVIH", "INF", "ETO",
         "UMNR", "PETC", "DEAF", "BLND", "MAAS", "STCR", "MEDA",
         "WCLB", "WCMP", "SVAN", "ESAN", "INAD", "DEPA", "DEPU"
     };
@@ -30,6 +30,7 @@ public sealed class SpecialCodeSettings
             var json = File.ReadAllText(FilePath);
             var loaded = JsonSerializer.Deserialize<SpecialCodeSettings>(json) ?? new SpecialCodeSettings();
             loaded.Codes = Normalize(loaded.Codes);
+            EnsureDedicatedCodes(loaded.Codes);
             return loaded;
         }
         catch
@@ -52,5 +53,14 @@ public sealed class SpecialCodeSettings
             .Where(c => Regex.IsMatch(c, @"^[A-Z0-9]{3,6}$"))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static void EnsureDedicatedCodes(List<string> codes)
+    {
+        // INF y ETO alimentan columnas propias del Excel y siempre deben leerse,
+        // incluso si existe una configuración guardada de una versión anterior.
+        foreach (var required in new[] { "INF", "ETO" })
+            if (!codes.Contains(required, StringComparer.OrdinalIgnoreCase))
+                codes.Add(required);
     }
 }

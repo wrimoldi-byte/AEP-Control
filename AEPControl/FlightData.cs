@@ -11,13 +11,15 @@ public sealed class FlightData
     public int Economy { get; set; }
     public bool BookingKnown { get; set; }
     public int Total => Premium + Economy;
-    public string Booking => BookingKnown ? $"{Premium:000}/{Economy:000}" : string.Empty;
+    // Mantener PE y Economy separados. No sumar estos valores al mostrar o exportar PAX.
+    public string Booking => BookingKnown ? $"{Premium}/{Economy}" : string.Empty;
 
     public int WCHR { get; set; }
     public int WCHS { get; set; }
     public int WCHC { get; set; }
     public int AVIH { get; set; }
     public int INF { get; set; }
+    public int ETO { get; set; }
     public int UMNR { get; set; }
     public int PETC { get; set; }
     public int DEAF { get; set; }
@@ -41,7 +43,7 @@ public sealed class FlightData
         {
             var parts = new List<string>();
             Add(parts, "WCHR", WCHR); Add(parts, "WCHS", WCHS); Add(parts, "WCHC", WCHC);
-            Add(parts, "AVIH", AVIH); Add(parts, "INF", INF); Add(parts, "UMNR", UMNR);
+            Add(parts, "AVIH", AVIH); Add(parts, "INF", INF); Add(parts, "ETO", ETO); Add(parts, "UMNR", UMNR);
             Add(parts, "PETC", PETC); Add(parts, "DEAF", DEAF); Add(parts, "BLND", BLND);
             Add(parts, "MAAS", MAAS); Add(parts, "STCR", STCR); Add(parts, "MEDA", MEDA);
             Add(parts, "WCLB", WCLB); Add(parts, "WCMP", WCMP); Add(parts, "SVAN", SVAN);

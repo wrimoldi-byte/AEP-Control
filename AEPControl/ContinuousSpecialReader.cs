@@ -442,6 +442,7 @@ public sealed class ContinuousSpecialReader
             case "WCHC": result.WCHC++; break;
             case "AVIH": result.AVIH++; break;
             case "INF": result.INF++; break;
+            case "ETO": result.ETO++; break;
             case "UMNR": result.UMNR++; break;
             case "PETC": result.PETC++; break;
             case "DEAF": result.DEAF++; break;

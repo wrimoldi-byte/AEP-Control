@@ -7,6 +7,7 @@ public sealed class SpecialCounts
     public int WCHC { get; set; }
     public int AVIH { get; set; }
     public int INF { get; set; }
+    public int ETO { get; set; }
 
     public int UMNR { get; set; }
     public int PETC { get; set; }
@@ -25,5 +26,5 @@ public sealed class SpecialCounts
 
     public Dictionary<string, int> Extra { get; } = new(StringComparer.OrdinalIgnoreCase);
 
-    public int Total => WCHR + WCHS + WCHC + AVIH + INF + UMNR + PETC + DEAF + BLND + MAAS + STCR + MEDA + WCLB + WCMP + SVAN + ESAN + INAD + DEPA + DEPU + Extra.Values.Sum();
+    public int Total => WCHR + WCHS + WCHC + AVIH + INF + ETO + UMNR + PETC + DEAF + BLND + MAAS + STCR + MEDA + WCLB + WCMP + SVAN + ESAN + INAD + DEPA + DEPU + Extra.Values.Sum();
 }
