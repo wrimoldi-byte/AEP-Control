@@ -1,4 +1,4 @@
-# AEP Control v2.22
+# AEP Control v2.23
 
 Prototipo portátil para Windows que lee por OCR la tabla de vuelos del siguiente turno.
 
@@ -21,6 +21,13 @@ Entrar en **Actions**, abrir la ejecución más reciente y descargar el artefact
 - Algún idioma de reconocimiento óptico instalado en Windows.
 
 Esta versión es una prueba inicial. El resultado debe revisarse antes de utilizarlo operativamente.
+
+## Cambios de v2.23
+
+- Se reforzó la lectura de **Origen** en llegadas y **Destino** en salidas.
+- Cada captura se procesa dos veces y los resultados se fusionan por número de vuelo.
+- Los códigos IATA se validan y se corrigen confusiones frecuentes como `G1G/GIG`, `L1M/LIM` y `P0A/POA`.
+- Durante la lectura continua se elige el aeropuerto más reconocido, evitando que un error aislado quede guardado.
 
 ## Cambios de v2.22
 

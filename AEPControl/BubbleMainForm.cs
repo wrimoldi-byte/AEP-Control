@@ -23,7 +23,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v2.22";
+        Text = "AEP Control v2.23";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1280, 720);
         TopMost = true;
@@ -147,7 +147,7 @@ public sealed class BubbleMainForm : Form
         _action.Visible = false;
         _export.Enabled = false;
         _title.Text = "Paso 1 — Vuelos de llegada";
-        _help.Text = "Marcá SOLO la grilla de Sabre: desde los encabezados No/Aerolínea/Vuelo hasta la última fila visible. La app leerá Vuelo, Origen, Hora y Booking por columnas mientras hacés scroll.";
+        _help.Text = "Marcá SOLO la grilla de Sabre: desde los encabezados No/Aerolínea/Vuelo hasta la última fila visible. La app leerá Vuelo, Origen o Destino, Hora y Booking por columnas mientras hacés scroll.";
         _status.Text = "Esperando lectura.";
         Show();
     }
@@ -166,6 +166,7 @@ public sealed class BubbleMainForm : Form
 
         var area = selector.SelectedArea;
         var unique = new Dictionary<string, FlightData>(StringComparer.OrdinalIgnoreCase);
+        var airportVotes = new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase);
         var finishRequested = false;
         _cts = new CancellationTokenSource();
         _bubble = new BubbleForm($"Vuelos de {movement.ToLowerInvariant()}", BubbleMode.FlightList);
@@ -178,10 +179,19 @@ public sealed class BubbleMainForm : Form
             if (!unique.TryGetValue(incoming.Vuelo, out var existing))
             {
                 unique[incoming.Vuelo] = incoming;
-                return;
+                existing = incoming;
             }
 
-            if (string.IsNullOrWhiteSpace(existing.Destino) && !string.IsNullOrWhiteSpace(incoming.Destino)) existing.Destino = incoming.Destino;
+            if (!string.IsNullOrWhiteSpace(incoming.Destino))
+            {
+                if (!airportVotes.TryGetValue(incoming.Vuelo, out var votes))
+                {
+                    votes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                    airportVotes[incoming.Vuelo] = votes;
+                }
+                votes[incoming.Destino] = votes.GetValueOrDefault(incoming.Destino) + 1;
+                existing.Destino = votes.OrderByDescending(item => item.Value).Select(item => item.Key).First();
+            }
             if (string.IsNullOrWhiteSpace(existing.Hora) && !string.IsNullOrWhiteSpace(incoming.Hora)) existing.Hora = incoming.Hora;
             if (string.IsNullOrWhiteSpace(existing.Equipo) && !string.IsNullOrWhiteSpace(incoming.Equipo)) existing.Equipo = incoming.Equipo;
             if (!existing.BookingKnown && incoming.BookingKnown)

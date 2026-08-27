@@ -10,7 +10,10 @@ public static class FlightColumnReader
     private static readonly Regex RawTimeRegex = new(@"\b(?<time>\d{1,2}\s*[:.]?\s*\d{2})\b", RegexOptions.Compiled);
     private static readonly Regex BookingRegex = new(@"\b(?<premium>\d{1,3})\s*[/\\|]\s*(?<economy>\d{1,3})\*?\b", RegexOptions.Compiled);
 
-    private static readonly string[] PriorityOrigins = { "GRU", "SCL", "LIM", "GIG" };
+    private static readonly string[] ExpectedAepAirports =
+    {
+        "GRU", "SCL", "LIM", "GIG", "POA", "FLN", "BSB", "CWB", "MVD", "ASU"
+    };
 
     private sealed record ColumnProfile(
         double FlightLeft, double FlightRight,
@@ -44,13 +47,11 @@ public static class FlightColumnReader
 
         var isDeparture = movement.Equals("Salida", StringComparison.OrdinalIgnoreCase);
         var primaryTask = ReadProfileAsync(grid, profile, isDeparture, 0);
-        if (!isDeparture)
-            return await primaryTask;
 
-        // Windows OCR suele ignorar el primer renglón cuando queda pegado al
-        // borde del recorte. Una segunda pasada con margen blanco recupera esa
-        // fila. Luego se fusionan los resultados por número de vuelo.
-        var paddedTask = ReadProfileAsync(grid, profile, true, 22);
+        // Windows OCR puede ignorar o deformar un código IATA cuando queda
+        // pegado al borde del recorte. Se hacen dos pasadas tanto en llegadas
+        // como en salidas y se fusionan por número de vuelo.
+        var paddedTask = ReadProfileAsync(grid, profile, isDeparture, 22);
         await Task.WhenAll(primaryTask, paddedTask);
         return MergeRows(primaryTask.Result, paddedTask.Result);
     }
@@ -80,16 +81,25 @@ public static class FlightColumnReader
     private static List<FlightData> MergeRows(params IEnumerable<FlightData>[] readings)
     {
         var result = new Dictionary<string, FlightData>(StringComparer.OrdinalIgnoreCase);
+        var airportVotes = new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase);
         foreach (var incoming in readings.SelectMany(x => x))
         {
             if (!result.TryGetValue(incoming.Vuelo, out var existing))
             {
                 result[incoming.Vuelo] = incoming;
-                continue;
+                existing = incoming;
             }
 
-            if (string.IsNullOrWhiteSpace(existing.Destino) && !string.IsNullOrWhiteSpace(incoming.Destino))
-                existing.Destino = incoming.Destino;
+            if (!string.IsNullOrWhiteSpace(incoming.Destino))
+            {
+                if (!airportVotes.TryGetValue(incoming.Vuelo, out var votes))
+                {
+                    votes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                    airportVotes[incoming.Vuelo] = votes;
+                }
+                votes[incoming.Destino] = votes.GetValueOrDefault(incoming.Destino) + 1;
+                existing.Destino = votes.OrderByDescending(item => item.Value).Select(item => item.Key).First();
+            }
             if (string.IsNullOrWhiteSpace(existing.Hora) && !string.IsNullOrWhiteSpace(incoming.Hora))
                 existing.Hora = incoming.Hora;
             if (!existing.BookingKnown && incoming.BookingKnown)
@@ -212,24 +222,36 @@ public static class FlightColumnReader
     {
         raw = raw.ToUpperInvariant();
 
-        if (PriorityOrigins.Contains(raw, StringComparer.OrdinalIgnoreCase))
+        if (ExpectedAepAirports.Contains(raw, StringComparer.OrdinalIgnoreCase))
             return raw;
 
         var corrected = raw
             .Replace('1', 'I')
             .Replace('0', 'O')
             .Replace('5', 'S')
-            .Replace('8', 'B');
+            .Replace('8', 'B')
+            .Replace('6', 'G');
 
-        if (PriorityOrigins.Contains(corrected, StringComparer.OrdinalIgnoreCase))
+        if (ExpectedAepAirports.Contains(corrected, StringComparer.OrdinalIgnoreCase))
             return corrected;
 
-        if (raw is "G1G" or "GIG") return "GIG";
-        if (raw is "L1M" or "LIM") return "LIM";
-        if (raw is "SC1" or "SCL") return "SCL";
-        if (raw is "GRU") return "GRU";
+        var closest = ExpectedAepAirports
+            .Select(code => new { Code = code, Distance = CharacterDistance(corrected, code) })
+            .Where(item => item.Distance == 1)
+            .ToList();
+        if (closest.Count == 1)
+            return closest[0].Code;
 
-        return raw.All(char.IsLetter) ? raw : null;
+        return null;
+    }
+
+    private static int CharacterDistance(string left, string right)
+    {
+        if (left.Length != right.Length) return int.MaxValue;
+        var distance = 0;
+        for (var i = 0; i < left.Length; i++)
+            if (left[i] != right[i]) distance++;
+        return distance;
     }
 
     private static Bitmap Crop(Bitmap source, double leftRatio, double rightRatio, int padding = 0)
