@@ -23,7 +23,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v2.21";
+        Text = "AEP Control v2.22";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1280, 720);
         TopMost = true;
@@ -51,7 +51,7 @@ public sealed class BubbleMainForm : Form
         _readDepartures.Padding = new Padding(12, 7, 12, 7);
         _readDepartures.Click += async (_, _) => await ScanFlightsAsync("Salida");
 
-        _readDepartureOperation.Text = "Leer datos de salida";
+        _readDepartureOperation.Text = "INFO DE ITO";
         _readDepartureOperation.AutoSize = true;
         _readDepartureOperation.Padding = new Padding(12, 7, 12, 7);
         _readDepartureOperation.Enabled = false;
@@ -284,7 +284,8 @@ public sealed class BubbleMainForm : Form
             return;
         }
 
-        _status.Text = "Seleccioná el cuadro completo del vuelo de salida: vuelo, matrícula, configuración y servicios.";
+        var selectedDeparture = _departureGrid.CurrentRow?.DataBoundItem as FlightData;
+        _status.Text = "Seleccioná el cuadro ITO completo: número de vuelo, matrícula, configuración y servicios.";
         Hide();
         await Task.Delay(250);
 
@@ -300,17 +301,15 @@ public sealed class BubbleMainForm : Form
             using (var graphics = Graphics.FromImage(bitmap))
                 graphics.CopyFromScreen(selector.SelectedArea.Location, Point.Empty, selector.SelectedArea.Size);
 
-            var text = await OcrService.ReadAsync(bitmap);
-            var data = DepartureOperationParser.Parse(text);
-            var selectedDeparture = _departureGrid.CurrentRow?.DataBoundItem as FlightData;
+            var data = await OcrService.ReadDepartureOperationAsync(bitmap);
             var target = FindDeparture(data.Vuelo);
-            if (target is null && string.IsNullOrWhiteSpace(data.Vuelo))
+            if (target is null)
                 target = selectedDeparture;
 
             if (target is null)
             {
                 MessageBox.Show(
-                    "No pude relacionar la pantalla con un vuelo de salida. Seleccioná primero el vuelo en la grilla y repetí la captura.",
+                    "No pude relacionar la pantalla ITO con un vuelo. Seleccioná primero la salida correspondiente en la grilla y repetí la captura.",
                     "AEP Control",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
@@ -320,7 +319,7 @@ public sealed class BubbleMainForm : Form
             if (!data.HasOperationalData)
             {
                 MessageBox.Show(
-                    "El OCR detectó la pantalla, pero no encontró matrícula, configuración ni servicios. Probá seleccionando el cuadro completo con un pequeño margen.",
+                    "El OCR detectó la pantalla ITO, pero no encontró matrícula, configuración ni servicios. Seleccioná el cuadro completo con un pequeño margen.",
                     "AEP Control",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
@@ -367,7 +366,7 @@ public sealed class BubbleMainForm : Form
         _stage = 2;
         _action.Visible = true;
         _title.Text = "Paso 3 — Especiales de llegadas y salidas";
-        _help.Text = "En Salidas, usá Leer datos de salida para completar matrícula, configuración y SVCS. Para EDITS, elegí cualquier vuelo: se leerá exactamente el seleccionado, sin importar el orden.";
+        _help.Text = "En Salidas, usá INFO DE ITO para completar matrícula, configuración y SVCS. Para EDITS, elegí cualquier vuelo: se leerá exactamente el seleccionado, sin importar el orden.";
         _action.Text = "Leer EDITS del vuelo seleccionado";
         _status.Text = $"Listas completas: {_arrivals.Count} llegadas + {_departures.Count} salidas.";
     }

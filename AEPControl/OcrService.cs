@@ -90,6 +90,88 @@ public static class OcrService
         return LastRawText;
     }
 
+    public static async Task<DepartureOperationData> ReadDepartureOperationAsync(Bitmap bitmap)
+    {
+        if (bitmap.Width < 120 || bitmap.Height < 80)
+            throw new InvalidOperationException("La zona seleccionada es demasiado pequeña. Marcá el cuadro ITO completo.");
+
+        var folder = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            "AEPControl-Diagnostico");
+        Directory.CreateDirectory(folder);
+        LastDiagnosticFolder = folder;
+
+        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
+        bitmap.Save(Path.Combine(folder, $"ito-captura-{stamp}.png"), ImageFormat.Png);
+
+        var leftWidth = Math.Max(20, (int)(bitmap.Width * 0.56));
+        var rightX = Math.Max(0, (int)(bitmap.Width * 0.43));
+        var candidates = new List<(string Name, Bitmap Image, bool Dispose)>
+        {
+            ("ito-original", bitmap, false),
+            ("ito-gris-2x", Enhance(bitmap, 2, 1.45f, false), true),
+            ("ito-contraste-3x", Enhance(bitmap, 3, 1.90f, true), true),
+            ("ito-datos-aeronave-3x", EnhanceCrop(bitmap, new Rectangle(0, 0, leftWidth, bitmap.Height), 3, 1.55f), true),
+            ("ito-servicios-3x", EnhanceCrop(bitmap, new Rectangle(rightX, 0, bitmap.Width - rightX, bitmap.Height), 3, 1.55f), true)
+        };
+
+        var engines = CreateEngines().Take(3).ToList();
+        var results = new List<(string Name, string Language, string Text)>();
+        try
+        {
+            foreach (var candidate in candidates)
+            {
+                if (candidate.Dispose)
+                    candidate.Image.Save(Path.Combine(folder, $"{candidate.Name}-{stamp}.png"), ImageFormat.Png);
+
+                foreach (var engine in engines)
+                {
+                    try
+                    {
+                        var text = await RecognizeAsync(candidate.Image, engine.Engine);
+                        if (!string.IsNullOrWhiteSpace(text))
+                            results.Add((candidate.Name, engine.Language, text));
+                    }
+                    catch (Exception ex)
+                    {
+                        results.Add((candidate.Name, engine.Language, $"[ERROR OCR: {ex.Message}]"));
+                    }
+                }
+            }
+        }
+        finally
+        {
+            foreach (var candidate in candidates.Where(candidate => candidate.Dispose))
+                candidate.Image.Dispose();
+        }
+
+        var validTexts = results
+            .Select(result => result.Text)
+            .Where(text => !string.IsNullOrWhiteSpace(text) && !text.StartsWith("[ERROR OCR:", StringComparison.Ordinal))
+            .ToList();
+        LastRawText = string.Join(Environment.NewLine, validTexts);
+
+        if (validTexts.Count == 0)
+            throw new InvalidOperationException("El OCR no pudo leer el cuadro ITO. Marcá la pantalla completa con un pequeño margen.");
+
+        var data = DepartureOperationParser.ParseMany(validTexts);
+        var report = new List<string>
+        {
+            $"Fecha: {DateTime.Now:yyyy-MM-dd HH:mm:ss}",
+            $"Captura ITO: {bitmap.Width}x{bitmap.Height}",
+            $"Resultado: vuelo={data.Vuelo}; matrícula={data.Matricula}; configuración={data.Configuracion}; servicios={data.Servicios}",
+            ""
+        };
+        foreach (var result in results)
+        {
+            report.Add($"=== {result.Name} | {result.Language} ===");
+            report.Add(result.Text);
+            report.Add("");
+        }
+        File.WriteAllLines(Path.Combine(folder, $"ito-ocr-{stamp}.txt"), report);
+        return data;
+    }
+
     public static async Task<string> ReadContinuousAsync(Bitmap bitmap)
     {
         if (bitmap.Width < 20 || bitmap.Height < 20)
@@ -187,6 +269,12 @@ public static class OcrService
             ApplyThreshold(target, 185);
 
         return target;
+    }
+
+    private static Bitmap EnhanceCrop(Bitmap source, Rectangle area, int scale, float contrast)
+    {
+        using var crop = source.Clone(area, PixelFormat.Format24bppRgb);
+        return Enhance(crop, scale, contrast, false);
     }
 
     private static void ApplyThreshold(Bitmap bitmap, byte limit)

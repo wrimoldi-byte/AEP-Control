@@ -4,42 +4,69 @@ namespace AEPControl;
 
 public static class DepartureOperationParser
 {
+    private const string OcrNumber = @"[0-9OQDIL|BS]{1,3}";
+
+    private static readonly Regex LabeledFlightRegex = new(
+        @"(?:N(?:RO|[°ºO0])?\s*DE\s*VUELO|NUMERO\s+DE\s+VUELO|VUELO)\s*(?:LA\s*)?(?<number>\d{3,4})\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private static readonly Regex FlightRegex = new(
         @"\bLA\s*[-:]?\s*(?<number>\d{3,4})\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex RegistrationRegex = new(
-        @"\b(?<prefix>CC|PR|PS)\s*-?\s*(?<suffix>[A-Z0-9]{3})\b",
+        @"\b(?<prefix>CC|PR|PS)\s*[-:]?\s*(?<suffix>[A-Z0-9]{3})\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex StrictConfigurationRegex = new(
-        @"\bJ\s*(?<premium>\d{1,3})\s*[-/|]\s*Y\s*(?<economy>\d{1,3})\b",
+        $@"\bJ\s*(?<premium>{OcrNumber})\s*[-/|]\s*Y\s*(?<economy>{OcrNumber})\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex ConfigurationLabelRegex = new(
-        @"CONF(?:IG(?:URACION)?)?\.?\s*(?:DE\s*)?AERONAVE(?<tail>.{0,60})",
+        @"CONF(?:IG(?:URACION)?)?\.?\s*(?:DE\s*)?AERONAVE(?<tail>.{0,90})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex LooseConfigurationRegex = new(
-        @"\bJ\s*(?<premium>\d{1,3})\s*(?:[-/|]\s*)?Y\s*(?<economy>\d{1,3})\b",
+        $@"\bJ\s*(?<premium>{OcrNumber})\s*(?:[-/|]\s*)?Y\s*(?<economy>{OcrNumber})\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex ServiceRegex = new(
-        @"\b(?<code>HLDL|HLDR|SPMLJ|SPMLY)\s*(?<count>\d{1,3})\b",
+        $@"\b(?<code>HL[DO0][LR1I]|SPML[JYIV])\s*[:\-]?\s*(?<count>{OcrNumber})\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    public static DepartureOperationData ParseMany(IEnumerable<string> readings)
+    {
+        var parsed = readings
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Select(Parse)
+            .ToList();
+
+        return new DepartureOperationData
+        {
+            Vuelo = PickMostFrequent(parsed.Select(item => item.Vuelo)),
+            Matricula = PickMostFrequent(parsed.Select(item => item.Matricula)),
+            Configuracion = PickMostFrequent(parsed.Select(item => item.Configuracion)),
+            Servicios = PickRichestServices(parsed.Select(item => item.Servicios))
+        };
+    }
 
     public static DepartureOperationData Parse(string text)
     {
         var normalized = Normalize(text);
         var result = new DepartureOperationData();
 
-        var flight = FlightRegex.Match(normalized);
+        var flight = LabeledFlightRegex.Match(normalized);
+        if (!flight.Success)
+            flight = FlightRegex.Match(normalized);
         if (flight.Success)
             result.Vuelo = $"LA{flight.Groups["number"].Value}";
 
         var registration = RegistrationRegex.Match(normalized);
         if (registration.Success)
-            result.Matricula = $"{registration.Groups["prefix"].Value}-{registration.Groups["suffix"].Value}";
+        {
+            var suffix = NormalizeRegistrationSuffix(registration.Groups["suffix"].Value);
+            result.Matricula = $"{registration.Groups["prefix"].Value}-{suffix}";
+        }
 
         var configuration = StrictConfigurationRegex.Match(normalized);
         if (!configuration.Success)
@@ -50,11 +77,20 @@ public static class DepartureOperationParser
         }
 
         if (configuration.Success)
-            result.Configuracion = $"J {configuration.Groups["premium"].Value} - Y {configuration.Groups["economy"].Value}";
+        {
+            var premium = NormalizeOcrNumber(configuration.Groups["premium"].Value);
+            var economy = NormalizeOcrNumber(configuration.Groups["economy"].Value);
+            if (premium.Length > 0 && economy.Length > 0)
+                result.Configuracion = $"J {premium} - Y {economy}";
+        }
 
         var services = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (Match match in ServiceRegex.Matches(normalized))
-            services[match.Groups["code"].Value.ToUpperInvariant()] = int.Parse(match.Groups["count"].Value);
+        {
+            var countText = NormalizeOcrNumber(match.Groups["count"].Value);
+            if (!int.TryParse(countText, out var count)) continue;
+            services[NormalizeServiceCode(match.Groups["code"].Value)] = count;
+        }
 
         if (services.Count > 0)
         {
@@ -67,6 +103,54 @@ public static class DepartureOperationParser
         }
 
         return result;
+    }
+
+    private static string PickMostFrequent(IEnumerable<string> values) => values
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .GroupBy(value => value, StringComparer.OrdinalIgnoreCase)
+        .OrderByDescending(group => group.Count())
+        .ThenByDescending(group => group.Key.Length)
+        .Select(group => group.Key)
+        .FirstOrDefault() ?? string.Empty;
+
+    private static string PickRichestServices(IEnumerable<string> values) => values
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .GroupBy(value => value, StringComparer.OrdinalIgnoreCase)
+        .OrderByDescending(group => Regex.Matches(group.Key, @"\b(?:HLDL|HLDR|SPMLJ|SPMLY)\b").Count)
+        .ThenByDescending(group => group.Count())
+        .ThenByDescending(group => group.Key.Length)
+        .Select(group => group.Key)
+        .FirstOrDefault() ?? string.Empty;
+
+    private static string NormalizeRegistrationSuffix(string value) => value
+        .ToUpperInvariant()
+        .Replace('0', 'O')
+        .Replace('1', 'I')
+        .Replace('8', 'B');
+
+    private static string NormalizeOcrNumber(string value)
+    {
+        var normalized = value
+            .ToUpperInvariant()
+            .Replace('O', '0')
+            .Replace('Q', '0')
+            .Replace('D', '0')
+            .Replace('I', '1')
+            .Replace('L', '1')
+            .Replace('B', '8')
+            .Replace('S', '5')
+            .Replace('|', '1');
+        return new string(normalized.Where(char.IsDigit).ToArray());
+    }
+
+    private static string NormalizeServiceCode(string value)
+    {
+        var code = value.ToUpperInvariant();
+        if (code.StartsWith("HL", StringComparison.Ordinal) && code.Length == 4)
+            return code[3] == 'R' ? "HLDR" : "HLDL";
+        if (code is "SPMLI" or "SPMLV")
+            return code == "SPMLI" ? "SPMLJ" : "SPMLY";
+        return code;
     }
 
     private static int ServiceOrder(string code) => code switch

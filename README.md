@@ -1,4 +1,4 @@
-# AEP Control v2.21
+# AEP Control v2.22
 
 Prototipo portátil para Windows que lee por OCR la tabla de vuelos del siguiente turno.
 
@@ -22,7 +22,15 @@ Entrar en **Actions**, abrir la ejecución más reciente y descargar el artefact
 
 Esta versión es una prueba inicial. El resultado debe revisarse antes de utilizarlo operativamente.
 
-## Cambios de v2.21
+## Cambios de v2.22
+
+- El botón **Leer datos de salida** ahora se llama **INFO DE ITO**.
+- La pantalla ITO se procesa completa y también por sectores separados para mejorar la lectura de datos pequeños y de distintos colores.
+- Se comparan múltiples resultados OCR antes de elegir matrícula, configuración y servicios.
+- Se reforzó la corrección de confusiones habituales del OCR como `I/1`, `O/0` y `B/8`.
+- Si el número de vuelo no se reconoce correctamente, se utiliza la salida seleccionada en la grilla en lugar de perder la captura.
+
+## Funciones incorporadas en v2.21
 
 - Nuevo botón **Leer datos de salida**: captura el cuadro operativo y lo relaciona con el vuelo por número.
 - El OCR extrae **matrícula**, **configuración de aeronave** y los servicios `HLDL`, `HLDR`, `SPMLJ` y `SPMLY`.
