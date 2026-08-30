@@ -366,10 +366,9 @@ public sealed class ContinuousSpecialReader
     {
         var result = new SpecialCounts();
 
-        // Para asistencia de silla de ruedas, un mismo pasajero puede venir con más de
-        // un EDIT (por ejemplo WCHR + WCHS). En ese caso no son dos pasajeros.
-        // Contamos una sola vez según la asistencia más restrictiva:
-        // WCHC > WCHS > WCHR.
+        // Un mismo pasajero puede tener más de un EDIT de silla de ruedas.
+        // Solo en ese caso se cuenta una vez con la asistencia más restrictiva:
+        // WCHC > WCHS > WCHR. Pasajeros distintos siempre se suman por separado.
         var wheelchairRows = _confirmed
             .Where(r => IsWheelchairCode(r.Code))
             .ToList();
@@ -415,19 +414,14 @@ public sealed class ContinuousSpecialReader
 
     private static bool SamePassengerForWheelchair(ConfirmedRow a, ConfirmedRow b)
     {
+        // Para aplicar la prioridad necesitamos identidad real del pasajero.
+        // No usamos similitud global del OCR porque puede fusionar pasajeros distintos.
         if (!string.IsNullOrWhiteSpace(a.Passenger) && !string.IsNullOrWhiteSpace(b.Passenger) &&
-            PassengerEquivalent(a.Passenger, b.Passenger))
+            a.Passenger.Equals(b.Passenger, StringComparison.OrdinalIgnoreCase))
             return true;
 
         if (!string.IsNullOrWhiteSpace(a.Seat) && !string.IsNullOrWhiteSpace(b.Seat) &&
             a.Seat.Equals(b.Seat, StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        // Si no hay nombre ni asiento, sólo unimos cuando la misma fila OCR contiene
-        // ambos códigos. Así evitamos fusionar dos pasajeros distintos por error.
-        if (string.IsNullOrWhiteSpace(a.Passenger) && string.IsNullOrWhiteSpace(b.Passenger) &&
-            string.IsNullOrWhiteSpace(a.Seat) && string.IsNullOrWhiteSpace(b.Seat) &&
-            CanonicalSimilarity(a.Canonical, b.Canonical) >= 0.94)
             return true;
 
         return ReferenceEquals(a, b);
