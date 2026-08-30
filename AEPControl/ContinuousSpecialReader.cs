@@ -282,6 +282,19 @@ public sealed class ContinuousSpecialReader
         return Similarity(a, b) >= 0.88;
     }
 
+    private static bool StrongPassengerEquivalent(string a, string b)
+    {
+        if (a.Equals(b, StringComparison.OrdinalIgnoreCase)) return true;
+
+        var aParts = a.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var bParts = b.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (aParts.Length < 2 || bParts.Length < 2) return false;
+
+        var sameLast = aParts[0].Equals(bParts[0], StringComparison.OrdinalIgnoreCase) || Similarity(aParts[0], bParts[0]) >= 0.92;
+        var sameFirst = aParts[1].Equals(bParts[1], StringComparison.OrdinalIgnoreCase) || Similarity(aParts[1], bParts[1]) >= 0.92;
+        return sameLast && sameFirst;
+    }
+
     private static string NormalizeSeat(string value)
     {
         value = value.Trim().ToUpperInvariant();
@@ -366,9 +379,6 @@ public sealed class ContinuousSpecialReader
     {
         var result = new SpecialCounts();
 
-        // Un mismo pasajero puede tener más de un EDIT de silla de ruedas.
-        // Solo en ese caso se cuenta una vez con la asistencia más restrictiva:
-        // WCHC > WCHS > WCHR. Pasajeros distintos siempre se suman por separado.
         var wheelchairRows = _confirmed
             .Where(r => IsWheelchairCode(r.Code))
             .ToList();
@@ -414,14 +424,17 @@ public sealed class ContinuousSpecialReader
 
     private static bool SamePassengerForWheelchair(ConfirmedRow a, ConfirmedRow b)
     {
-        // Para aplicar la prioridad necesitamos identidad real del pasajero.
-        // No usamos similitud global del OCR porque puede fusionar pasajeros distintos.
-        if (!string.IsNullOrWhiteSpace(a.Passenger) && !string.IsNullOrWhiteSpace(b.Passenger) &&
-            a.Passenger.Equals(b.Passenger, StringComparison.OrdinalIgnoreCase))
-            return true;
-
         if (!string.IsNullOrWhiteSpace(a.Seat) && !string.IsNullOrWhiteSpace(b.Seat) &&
             a.Seat.Equals(b.Seat, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(a.Passenger) && !string.IsNullOrWhiteSpace(b.Passenger) &&
+            StrongPassengerEquivalent(a.Passenger, b.Passenger))
+            return true;
+
+        if (string.IsNullOrWhiteSpace(a.Passenger) && string.IsNullOrWhiteSpace(b.Passenger) &&
+            string.IsNullOrWhiteSpace(a.Seat) && string.IsNullOrWhiteSpace(b.Seat) &&
+            CanonicalSimilarity(a.Canonical, b.Canonical) >= 0.94)
             return true;
 
         return ReferenceEquals(a, b);
