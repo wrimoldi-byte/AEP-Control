@@ -30,8 +30,10 @@ public static class DepartureOperationParser
         $@"\bJ\s*(?<premium>{OcrNumber})\s*(?:[-/|]\s*)?Y\s*(?<economy>{OcrNumber})\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    // Servicios/catering del ITO. Se exige el código para no confundir los números
+    // de PASAJERO (J/Y) ni la configuración de la aeronave con comidas/snacks.
     private static readonly Regex ServiceRegex = new(
-        $@"\b(?<code>HL[DO0][LR1I]|SPML[JYIV])\s*[:\-]?\s*(?<count>{OcrNumber})\b",
+        $@"\b(?<code>HL[DO0][LR1I]|CSPY|SPM2|SPML[JYIV])\s*[:\-]?\s*(?<count>{OcrNumber})\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public static DepartureOperationData ParseMany(IEnumerable<string> readings)
@@ -68,13 +70,16 @@ public static class DepartureOperationParser
             result.Matricula = $"{registration.Groups["prefix"].Value}-{suffix}";
         }
 
-        var configuration = StrictConfigurationRegex.Match(normalized);
+        // Primero buscar J/Y dentro del bloque CONF. AERONAVE.
+        // Así no tomamos por error el bloque superior PASAJERO J/Y.
+        Match configuration = Match.Empty;
+        var label = ConfigurationLabelRegex.Match(normalized);
+        if (label.Success)
+            configuration = LooseConfigurationRegex.Match(label.Groups["tail"].Value);
+
+        // Fallback para versiones de ITO donde el OCR perdió la etiqueta de configuración.
         if (!configuration.Success)
-        {
-            var label = ConfigurationLabelRegex.Match(normalized);
-            if (label.Success)
-                configuration = LooseConfigurationRegex.Match(label.Groups["tail"].Value);
-        }
+            configuration = StrictConfigurationRegex.Match(normalized);
 
         if (configuration.Success)
         {
@@ -94,12 +99,11 @@ public static class DepartureOperationParser
 
         if (services.Count > 0)
         {
-            var positive = services
-                .Where(item => item.Value > 0)
+            var ordered = services
                 .OrderBy(item => ServiceOrder(item.Key))
                 .Select(item => $"{item.Key} {item.Value}")
                 .ToList();
-            result.Servicios = positive.Count > 0 ? string.Join(" / ", positive) : "SIN SERVICIOS";
+            result.Servicios = ordered.Count > 0 ? string.Join(" / ", ordered) : "SIN SERVICIOS";
         }
 
         return result;
@@ -116,7 +120,7 @@ public static class DepartureOperationParser
     private static string PickRichestServices(IEnumerable<string> values) => values
         .Where(value => !string.IsNullOrWhiteSpace(value))
         .GroupBy(value => value, StringComparer.OrdinalIgnoreCase)
-        .OrderByDescending(group => Regex.Matches(group.Key, @"\b(?:HLDL|HLDR|SPMLJ|SPMLY)\b").Count)
+        .OrderByDescending(group => Regex.Matches(group.Key, @"\b(?:HLDL|HLDR|CSPY|SPM2|SPMLJ|SPMLY)\b").Count)
         .ThenByDescending(group => group.Count())
         .ThenByDescending(group => group.Key.Length)
         .Select(group => group.Key)
@@ -157,8 +161,10 @@ public static class DepartureOperationParser
     {
         "HLDL" => 1,
         "HLDR" => 2,
-        "SPMLJ" => 3,
-        "SPMLY" => 4,
+        "CSPY" => 3,
+        "SPM2" => 4,
+        "SPMLJ" => 5,
+        "SPMLY" => 6,
         _ => 10
     };
 
