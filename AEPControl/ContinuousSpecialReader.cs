@@ -278,22 +278,8 @@ public sealed class ContinuousSpecialReader
     private static bool PassengerEquivalent(string a, string b)
     {
         if (a.Equals(b, StringComparison.OrdinalIgnoreCase)) return true;
-
-        var aParts = a.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var bParts = b.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        // Cuando tenemos APELLIDO/NOMBRE, comparamos cada parte por separado. Esto tolera
-        // pequeños errores del OCR al scrollear, sin fusionar pasajeros distintos por una
-        // similitud accidental de toda la cadena.
-        if (aParts.Length >= 2 && bParts.Length >= 2)
-        {
-            var sameLast = aParts[0].Equals(bParts[0], StringComparison.OrdinalIgnoreCase) || Similarity(aParts[0], bParts[0]) >= 0.84;
-            var sameFirst = aParts[1].Equals(bParts[1], StringComparison.OrdinalIgnoreCase) || Similarity(aParts[1], bParts[1]) >= 0.84;
-            return sameLast && sameFirst;
-        }
-
         if (a.Length < 6 || b.Length < 6) return false;
-        return Similarity(a, b) >= 0.90;
+        return Similarity(a, b) >= 0.88;
     }
 
     private static bool StrongPassengerEquivalent(string a, string b)
@@ -304,8 +290,8 @@ public sealed class ContinuousSpecialReader
         var bParts = b.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (aParts.Length < 2 || bParts.Length < 2) return false;
 
-        var sameLast = aParts[0].Equals(bParts[0], StringComparison.OrdinalIgnoreCase) || Similarity(aParts[0], bParts[0]) >= 0.88;
-        var sameFirst = aParts[1].Equals(bParts[1], StringComparison.OrdinalIgnoreCase) || Similarity(aParts[1], bParts[1]) >= 0.88;
+        var sameLast = aParts[0].Equals(bParts[0], StringComparison.OrdinalIgnoreCase) || Similarity(aParts[0], bParts[0]) >= 0.92;
+        var sameFirst = aParts[1].Equals(bParts[1], StringComparison.OrdinalIgnoreCase) || Similarity(aParts[1], bParts[1]) >= 0.92;
         return sameLast && sameFirst;
     }
 
