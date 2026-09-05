@@ -18,6 +18,10 @@ public static class DepartureOperationParser
         @"\b(?<prefix>CC|PR|PS)\s*[-:]?\s*(?<suffix>[A-Z0-9]{3})\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    private static readonly Regex RegistrationLabelRegex = new(
+        @"MATR(?:I|1|L)CULA\s*[:\-]?\s*(?<tail>.{0,35})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private static readonly Regex StrictConfigurationRegex = new(
         $@"\bJ\s*(?<premium>{OcrNumber})\s*[-/|]\s*Y\s*(?<economy>{OcrNumber})\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -30,8 +34,18 @@ public static class DepartureOperationParser
         $@"\bJ\s*(?<premium>{OcrNumber})\s*(?:[-/|]\s*)?Y\s*(?<economy>{OcrNumber})\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    // Servicios/catering del ITO. Se exige el código para no confundir los números
-    // de PASAJERO (J/Y) ni la configuración de la aeronave con comidas/snacks.
+    private static readonly Regex PassengerLabelRegex = new(
+        @"PASAJER[O0]\s*(?<tail>.{0,120})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex PassengerInlineRegex = new(
+        $@"\bJ\s*(?<premium>{OcrNumber})\s+Y\s*(?<economy>{OcrNumber})\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex PassengerHeadersRegex = new(
+        $@"\bJ\s+Y\s+(?<premium>{OcrNumber})\s+(?<economy>{OcrNumber})\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private static readonly Regex ServiceRegex = new(
         $@"\b(?<code>HL[DO0][LR1I]|CSPY|SPM2|SPML[JYIV])\s*[:\-]?\s*(?<count>{OcrNumber})\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -46,9 +60,9 @@ public static class DepartureOperationParser
         return new DepartureOperationData
         {
             Vuelo = PickMostFrequent(parsed.Select(item => item.Vuelo)),
-            Matricula = PickMostFrequent(parsed.Select(item => item.Matricula)),
+            Matricula = PickRegistrationConsensus(parsed.Select(item => item.Matricula)),
             Configuracion = PickMostFrequent(parsed.Select(item => item.Configuracion)),
-            Servicios = PickRichestServices(parsed.Select(item => item.Servicios))
+            Servicios = PickMostFrequent(parsed.Select(item => item.Servicios))
         };
     }
 
@@ -63,21 +77,23 @@ public static class DepartureOperationParser
         if (flight.Success)
             result.Vuelo = $"LA{flight.Groups["number"].Value}";
 
-        var registration = RegistrationRegex.Match(normalized);
+        Match registration = Match.Empty;
+        var registrationLabel = RegistrationLabelRegex.Match(normalized);
+        if (registrationLabel.Success)
+            registration = RegistrationRegex.Match(registrationLabel.Groups["tail"].Value);
+        if (!registration.Success)
+            registration = RegistrationRegex.Match(normalized);
+
         if (registration.Success)
         {
             var suffix = NormalizeRegistrationSuffix(registration.Groups["suffix"].Value);
-            result.Matricula = $"{registration.Groups["prefix"].Value}-{suffix}";
+            result.Matricula = $"{registration.Groups["prefix"].Value.ToUpperInvariant()}-{suffix}";
         }
 
-        // Primero buscar J/Y dentro del bloque CONF. AERONAVE.
-        // Así no tomamos por error el bloque superior PASAJERO J/Y.
         Match configuration = Match.Empty;
         var label = ConfigurationLabelRegex.Match(normalized);
         if (label.Success)
             configuration = LooseConfigurationRegex.Match(label.Groups["tail"].Value);
-
-        // Fallback para versiones de ITO donde el OCR perdió la etiqueta de configuración.
         if (!configuration.Success)
             configuration = StrictConfigurationRegex.Match(normalized);
 
@@ -89,21 +105,50 @@ public static class DepartureOperationParser
                 result.Configuracion = $"J {premium} - Y {economy}";
         }
 
-        var services = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match match in ServiceRegex.Matches(normalized))
+        // Para comidas usamos los dos números del bloque PASAJERO del ITO.
+        // Ejemplo visual: J=16, Y=137 -> se guarda como 16/137.
+        var passengerLabel = PassengerLabelRegex.Match(normalized);
+        if (passengerLabel.Success)
         {
-            var countText = NormalizeOcrNumber(match.Groups["count"].Value);
-            if (!int.TryParse(countText, out var count)) continue;
-            services[NormalizeServiceCode(match.Groups["code"].Value)] = count;
+            var tail = passengerLabel.Groups["tail"].Value;
+            var passengerMatch = PassengerInlineRegex.Match(tail);
+            if (!passengerMatch.Success)
+                passengerMatch = PassengerHeadersRegex.Match(tail);
+
+            if (passengerMatch.Success)
+            {
+                var premium = NormalizeOcrNumber(passengerMatch.Groups["premium"].Value);
+                var economy = NormalizeOcrNumber(passengerMatch.Groups["economy"].Value);
+                if (IsReasonablePassengerCount(premium) && IsReasonablePassengerCount(economy))
+                    result.Servicios = $"{premium}/{economy}";
+            }
+            else
+            {
+                var numbers = Regex.Matches(tail, $@"\b{OcrNumber}\b")
+                    .Select(match => NormalizeOcrNumber(match.Value))
+                    .Where(IsReasonablePassengerCount)
+                    .Take(2)
+                    .ToList();
+                if (numbers.Count == 2)
+                    result.Servicios = $"{numbers[0]}/{numbers[1]}";
+            }
         }
 
-        if (services.Count > 0)
+        // Fallback: si el OCR perdió la palabra PASAJERO, usar CSPY/SPM2.
+        if (string.IsNullOrWhiteSpace(result.Servicios))
         {
-            var ordered = services
-                .OrderBy(item => ServiceOrder(item.Key))
-                .Select(item => $"{item.Key} {item.Value}")
-                .ToList();
-            result.Servicios = ordered.Count > 0 ? string.Join(" / ", ordered) : "SIN SERVICIOS";
+            int? j = null;
+            int? y = null;
+            foreach (Match match in ServiceRegex.Matches(normalized))
+            {
+                var code = NormalizeServiceCode(match.Groups["code"].Value);
+                var countText = NormalizeOcrNumber(match.Groups["count"].Value);
+                if (!int.TryParse(countText, out var count)) continue;
+                if (code == "CSPY") j ??= count;
+                if (code == "SPM2") y ??= count;
+            }
+            if (j.HasValue && y.HasValue)
+                result.Servicios = $"{j.Value}/{y.Value}";
         }
 
         return result;
@@ -117,14 +162,35 @@ public static class DepartureOperationParser
         .Select(group => group.Key)
         .FirstOrDefault() ?? string.Empty;
 
-    private static string PickRichestServices(IEnumerable<string> values) => values
-        .Where(value => !string.IsNullOrWhiteSpace(value))
-        .GroupBy(value => value, StringComparer.OrdinalIgnoreCase)
-        .OrderByDescending(group => Regex.Matches(group.Key, @"\b(?:HLDL|HLDR|CSPY|SPM2|SPMLJ|SPMLY)\b").Count)
-        .ThenByDescending(group => group.Count())
-        .ThenByDescending(group => group.Key.Length)
-        .Select(group => group.Key)
-        .FirstOrDefault() ?? string.Empty;
+    private static string PickRegistrationConsensus(IEnumerable<string> values)
+    {
+        var registrations = values
+            .Where(value => Regex.IsMatch(value ?? string.Empty, @"^(CC|PR|PS)-[A-Z]{3}$", RegexOptions.IgnoreCase))
+            .Select(value => value.ToUpperInvariant())
+            .ToList();
+        if (registrations.Count == 0) return string.Empty;
+
+        var prefix = registrations
+            .GroupBy(value => value[..2])
+            .OrderByDescending(group => group.Count())
+            .Select(group => group.Key)
+            .First();
+        var samePrefix = registrations.Where(value => value.StartsWith(prefix + "-", StringComparison.Ordinal)).ToList();
+        var suffix = new char[3];
+        for (var i = 0; i < 3; i++)
+        {
+            suffix[i] = samePrefix
+                .GroupBy(value => value[3 + i])
+                .OrderByDescending(group => group.Count())
+                .ThenBy(group => group.Key)
+                .Select(group => group.Key)
+                .First();
+        }
+        return $"{prefix}-{new string(suffix)}";
+    }
+
+    private static bool IsReasonablePassengerCount(string value) =>
+        int.TryParse(value, out var number) && number >= 0 && number <= 399;
 
     private static string NormalizeRegistrationSuffix(string value) => value
         .ToUpperInvariant()
@@ -156,17 +222,6 @@ public static class DepartureOperationParser
             return code == "SPMLI" ? "SPMLJ" : "SPMLY";
         return code;
     }
-
-    private static int ServiceOrder(string code) => code switch
-    {
-        "HLDL" => 1,
-        "HLDR" => 2,
-        "CSPY" => 3,
-        "SPM2" => 4,
-        "SPMLJ" => 5,
-        "SPMLY" => 6,
-        _ => 10
-    };
 
     private static string Normalize(string text)
     {
