@@ -102,7 +102,7 @@ public static class DepartureOperationParser
             var premium = NormalizeOcrNumber(configuration.Groups["premium"].Value);
             var economy = NormalizeOcrNumber(configuration.Groups["economy"].Value);
             if (premium.Length > 0 && economy.Length > 0)
-                result.Configuracion = $"J {premium} - Y {economy}";
+                result.Configuracion = $"{premium}/{economy}";
         }
 
         // Para comidas usamos los dos números del bloque PASAJERO del ITO.
