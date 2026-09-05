@@ -35,7 +35,7 @@ public static class DepartureOperationParser
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex PassengerLabelRegex = new(
-        @"PASAJER[O0]\s*(?<tail>.{0,120})",
+        @"PASAJER[O0]\s*(?<tail>.{0,140})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex PassengerInlineRegex = new(
@@ -52,19 +52,26 @@ public static class DepartureOperationParser
 
     public static DepartureOperationData ParseMany(IEnumerable<string> readings)
     {
-        var parsed = readings
+        var texts = readings
             .Where(text => !string.IsNullOrWhiteSpace(text))
-            .Select(Parse)
+            .ToList();
+
+        var parsed = texts.Select(Parse).ToList();
+        var visualPassengerValues = texts
+            .Select(TryReadPassengerBlockKeepingLines)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
             .ToList();
 
         return new DepartureOperationData
         {
             Vuelo = PickMostFrequent(parsed.Select(item => item.Vuelo)),
-            // Elegir una matrícula completa realmente leída. El consenso carácter por carácter
-            // podía fabricar una combinación inexistente (por ejemplo PR-TNO a partir de lecturas distintas).
             Matricula = PickMostFrequent(parsed.Select(item => item.Matricula)),
             Configuracion = PickMostFrequent(parsed.Select(item => item.Configuracion)),
-            Servicios = PickMostFrequent(parsed.Select(item => item.Servicios))
+            // Para comidas/PAX manda el número visual debajo de J e Y.
+            // CSPY/SPM2 se usa solamente si no logramos leer ese bloque.
+            Servicios = visualPassengerValues.Count > 0
+                ? PickMostFrequent(visualPassengerValues)
+                : PickMostFrequent(parsed.Select(item => item.Servicios))
         };
     }
 
@@ -107,22 +114,10 @@ public static class DepartureOperationParser
                 result.Configuracion = $"{premium}/{economy}";
         }
 
-        // En el ITO, CSPY y SPM2 repiten exactamente los valores visibles bajo J e Y.
-        // Cuando ambos están presentes son una referencia más estable que el orden del texto OCR.
-        int? serviceJ = null;
-        int? serviceY = null;
-        foreach (Match match in ServiceRegex.Matches(normalized))
-        {
-            var code = NormalizeServiceCode(match.Groups["code"].Value);
-            var countText = NormalizeOcrNumber(match.Groups["count"].Value);
-            if (!int.TryParse(countText, out var count) || count < 0 || count > 399) continue;
-            if (code == "CSPY") serviceJ ??= count;
-            if (code == "SPM2") serviceY ??= count;
-        }
-        if (serviceJ.HasValue && serviceY.HasValue)
-            result.Servicios = $"{serviceJ.Value}/{serviceY.Value}";
+        // Primero intentar leer el bloque PASAJERO conservando la estructura visual.
+        result.Servicios = TryReadPassengerBlockKeepingLines(text);
 
-        // Si faltó alguno de los códigos, leer directamente los dos números del bloque PASAJERO.
+        // Segundo intento sobre texto normalizado, por si Windows OCR unió las líneas.
         if (string.IsNullOrWhiteSpace(result.Servicios))
         {
             var passengerLabel = PassengerLabelRegex.Match(normalized);
@@ -140,20 +135,77 @@ public static class DepartureOperationParser
                     if (IsReasonablePassengerCount(premium) && IsReasonablePassengerCount(economy))
                         result.Servicios = $"{premium}/{economy}";
                 }
-                else
+            }
+        }
+
+        // Último fallback: CSPY/SPM2. No se consideran equivalentes obligatorios
+        // a los números de arriba porque en algunos ITO pueden diferir.
+        if (string.IsNullOrWhiteSpace(result.Servicios))
+        {
+            int? serviceJ = null;
+            int? serviceY = null;
+            foreach (Match match in ServiceRegex.Matches(normalized))
+            {
+                var code = NormalizeServiceCode(match.Groups["code"].Value);
+                var countText = NormalizeOcrNumber(match.Groups["count"].Value);
+                if (!int.TryParse(countText, out var count) || count < 0 || count > 399) continue;
+                if (code == "CSPY") serviceJ ??= count;
+                if (code == "SPM2") serviceY ??= count;
+            }
+            if (serviceJ.HasValue && serviceY.HasValue)
+                result.Servicios = $"{serviceJ.Value}/{serviceY.Value}";
+        }
+
+        return result;
+    }
+
+    private static string TryReadPassengerBlockKeepingLines(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+
+        var lines = text
+            .Replace('\r', '\n')
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(line => line.ToUpperInvariant())
+            .ToList();
+
+        var passengerIndex = lines.FindIndex(line => Regex.IsMatch(line, @"PASAJER[O0]", RegexOptions.IgnoreCase));
+        if (passengerIndex < 0) return string.Empty;
+
+        var end = Math.Min(lines.Count, passengerIndex + 8);
+        for (var i = passengerIndex; i < end; i++)
+        {
+            var line = lines[i];
+
+            // Caso: J 16        Y 137
+            var inline = Regex.Match(line,
+                $@"\bJ\s*(?<j>{OcrNumber})\b.*?\bY\s*(?<y>{OcrNumber})\b",
+                RegexOptions.IgnoreCase);
+            if (inline.Success)
+            {
+                var j = NormalizeOcrNumber(inline.Groups["j"].Value);
+                var y = NormalizeOcrNumber(inline.Groups["y"].Value);
+                if (IsReasonablePassengerCount(j) && IsReasonablePassengerCount(y))
+                    return $"{j}/{y}";
+            }
+
+            // Caso típico visual: una línea con J ... Y y la siguiente con 16 ... 137.
+            if (Regex.IsMatch(line, @"\bJ\b.*\bY\b", RegexOptions.IgnoreCase))
+            {
+                for (var next = i + 1; next < Math.Min(end, i + 4); next++)
                 {
-                    var numbers = Regex.Matches(tail, $@"\b{OcrNumber}\b")
+                    var nums = Regex.Matches(lines[next], $@"\b{OcrNumber}\b")
                         .Select(match => NormalizeOcrNumber(match.Value))
                         .Where(IsReasonablePassengerCount)
                         .Take(2)
                         .ToList();
-                    if (numbers.Count == 2)
-                        result.Servicios = $"{numbers[0]}/{numbers[1]}";
+                    if (nums.Count == 2)
+                        return $"{nums[0]}/{nums[1]}";
                 }
             }
         }
 
-        return result;
+        return string.Empty;
     }
 
     private static string PickMostFrequent(IEnumerable<string> values) => values
