@@ -172,12 +172,72 @@ public static class DepartureOperationParser
         var passengerIndex = lines.FindIndex(line => Regex.IsMatch(line, @"PASAJER[O0]", RegexOptions.IgnoreCase));
         if (passengerIndex < 0) return string.Empty;
 
-        var end = Math.Min(lines.Count, passengerIndex + 8);
+        // El ITO puede llegar del OCR de dos maneras:
+        // 1) J e Y en la misma línea y 8/124 debajo.
+        // 2) Por columnas: J, 8, CSPY 8... y luego Y, 124, SPM2 124...
+        // En ambos casos queremos SOLO los números visuales del bloque Pasajero,
+        // nunca la línea "Conf. Aeronave J 8 - Y 168".
+        var end = Math.Min(lines.Count, passengerIndex + 16);
+
+        static bool IsConfigurationLine(string line) =>
+            Regex.IsMatch(line, @"CONF(?:IG(?:URACION)?)?\.?\s*(?:DE\s*)?AERONAVE|CONFIGURACION", RegexOptions.IgnoreCase);
+
+        static string ReadStandaloneNumber(string line)
+        {
+            var match = Regex.Match(line.Trim(), $@"^(?<n>{OcrNumber})$");
+            if (!match.Success) return string.Empty;
+            var value = NormalizeOcrNumber(match.Groups["n"].Value);
+            return IsReasonablePassengerCount(value) ? value : string.Empty;
+        }
+
+        // Caso OCR por columnas: encontrar J y Y como encabezados aislados y tomar
+        // el primer número aislado inmediatamente posterior a cada encabezado.
+        string jValue = string.Empty;
+        string yValue = string.Empty;
+        for (var i = passengerIndex; i < end; i++)
+        {
+            var line = lines[i].Trim();
+            if (IsConfigurationLine(line)) continue;
+
+            if (string.IsNullOrWhiteSpace(jValue) && Regex.IsMatch(line, @"^J$", RegexOptions.IgnoreCase))
+            {
+                for (var next = i + 1; next < Math.Min(end, i + 4); next++)
+                {
+                    var value = ReadStandaloneNumber(lines[next]);
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        jValue = value;
+                        break;
+                    }
+                    if (Regex.IsMatch(lines[next], @"\b(CSPY|SPM[2Z]|SPML[JYIV]|HANDLING)\b", RegexOptions.IgnoreCase))
+                        break;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(yValue) && Regex.IsMatch(line, @"^Y$", RegexOptions.IgnoreCase))
+            {
+                for (var next = i + 1; next < Math.Min(end, i + 4); next++)
+                {
+                    var value = ReadStandaloneNumber(lines[next]);
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        yValue = value;
+                        break;
+                    }
+                    if (Regex.IsMatch(lines[next], @"\b(CSPY|SPM[2Z]|SPML[JYIV]|HANDLING)\b", RegexOptions.IgnoreCase))
+                        break;
+                }
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(jValue) && !string.IsNullOrWhiteSpace(yValue))
+            return $"{jValue}/{yValue}";
+
         for (var i = passengerIndex; i < end; i++)
         {
             var line = lines[i];
+            if (IsConfigurationLine(line)) continue;
 
-            // Caso: J 16        Y 137
+            // Caso: J 8        Y 124
             var inline = Regex.Match(line,
                 $@"\bJ\s*(?<j>{OcrNumber})\b.*?\bY\s*(?<y>{OcrNumber})\b",
                 RegexOptions.IgnoreCase);
@@ -189,11 +249,15 @@ public static class DepartureOperationParser
                     return $"{j}/{y}";
             }
 
-            // Caso típico visual: una línea con J ... Y y la siguiente con 16 ... 137.
+            // Caso típico visual: una línea con J ... Y y la siguiente con 8 ... 124.
             if (Regex.IsMatch(line, @"\bJ\b.*\bY\b", RegexOptions.IgnoreCase))
             {
                 for (var next = i + 1; next < Math.Min(end, i + 4); next++)
                 {
+                    if (IsConfigurationLine(lines[next])) continue;
+                    if (Regex.IsMatch(lines[next], @"\b(CSPY|SPM[2Z]|SPML[JYIV])\b", RegexOptions.IgnoreCase))
+                        break;
+
                     var nums = Regex.Matches(lines[next], $@"\b{OcrNumber}\b")
                         .Select(match => NormalizeOcrNumber(match.Value))
                         .Where(IsReasonablePassengerCount)
