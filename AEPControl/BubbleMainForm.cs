@@ -317,14 +317,14 @@ public sealed class BubbleMainForm : Form
             Activate();
         }
 
-        var usableFlights = movement.Equals("Llegada", StringComparison.OrdinalIgnoreCase)
-            ? unique.Values.Where(f => !string.IsNullOrWhiteSpace(f.Hora) && f.BookingKnown).ToList()
-            : unique.Values.ToList();
+        // No ocultar vuelos ya reconocidos porque una columna auxiliar (hora,
+        // origen o booking) no haya quedado alineada en esa captura.
+        var usableFlights = unique.Values.ToList();
 
         if (usableFlights.Count == 0)
         {
             _status.Text = movement.Equals("Llegada", StringComparison.OrdinalIgnoreCase)
-                ? "No detecté llegadas completas con hora y booking. Marcá la grilla incluyendo ambas columnas."
+                ? "No detecté números de vuelo en Llegadas. Marcá la grilla completa, incluyendo la columna Vuelo."
                 : "No detecté vuelos. Marcá sólo la grilla, desde los encabezados hasta la última fila visible.";
             return;
         }
@@ -346,7 +346,7 @@ public sealed class BubbleMainForm : Form
             _stage = 2;
             _title.Text = "Paso 2 — Vuelos de salida";
             _help.Text = "Llegadas guardadas. Abrí la grilla de salidas y presioná el botón fijo «Leer salidas».";
-            _status.Text = $"Llegadas guardadas con hora y booking: {usableFlights.Count}. Botón «Leer salidas» disponible arriba.";
+            _status.Text = $"Llegadas guardadas: {usableFlights.Count}. Los datos que el OCR no reconozca quedarán vacíos para revisión.";
             return;
         }
 
