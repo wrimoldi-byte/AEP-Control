@@ -104,15 +104,18 @@ public static class OcrService
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
         bitmap.Save(Path.Combine(folder, $"ito-captura-{stamp}.png"), ImageFormat.Png);
 
-        var leftWidth = Math.Max(20, (int)(bitmap.Width * 0.56));
-        var rightX = Math.Max(0, (int)(bitmap.Width * 0.43));
+        // El ITO tiene dos paneles separados por la línea vertical central.
+        // No deben solaparse: si el recorte derecho toma parte del panel izquierdo,
+        // "Conf. Aeronave J 8 - Y 168" puede confundirse con Pasajero 8/147.
+        var splitX = Math.Clamp((int)(bitmap.Width * 0.50), 20, bitmap.Width - 20);
         var candidates = new List<(string Name, Bitmap Image, bool Dispose)>
         {
             ("ito-original", bitmap, false),
             ("ito-gris-2x", Enhance(bitmap, 2, 1.45f, false), true),
             ("ito-contraste-3x", Enhance(bitmap, 3, 1.90f, true), true),
-            ("ito-datos-aeronave-3x", EnhanceCrop(bitmap, new Rectangle(0, 0, leftWidth, bitmap.Height), 3, 1.55f), true),
-            ("ito-servicios-3x", EnhanceCrop(bitmap, new Rectangle(rightX, 0, bitmap.Width - rightX, bitmap.Height), 3, 1.55f), true)
+            ("ito-datos-aeronave-3x", EnhanceCrop(bitmap, new Rectangle(0, 0, splitX, bitmap.Height), 3, 1.55f), true),
+            ("ito-pasajeros-3x", EnhanceCrop(bitmap, new Rectangle(splitX, 0, bitmap.Width - splitX, bitmap.Height), 3, 1.55f), true),
+            ("ito-pasajeros-4x", EnhanceCrop(bitmap, new Rectangle(splitX, 0, bitmap.Width - splitX, bitmap.Height), 4, 1.80f), true)
         };
 
         var engines = CreateEngines().Take(3).ToList();
@@ -155,6 +158,21 @@ public static class OcrService
             throw new InvalidOperationException("El OCR no pudo leer el cuadro ITO. Marcá la pantalla completa con un pequeño margen.");
 
         var data = DepartureOperationParser.ParseMany(validTexts);
+
+        // Para SVCS/PAX el panel derecho es la fuente autoritativa. De esta forma,
+        // una configuración J/Y del panel izquierdo nunca puede ganar por mayoría.
+        var passengerTexts = results
+            .Where(result => result.Name.StartsWith("ito-pasajeros-", StringComparison.Ordinal))
+            .Select(result => result.Text)
+            .Where(text => !string.IsNullOrWhiteSpace(text) && !text.StartsWith("[ERROR OCR:", StringComparison.Ordinal))
+            .ToList();
+        if (passengerTexts.Count > 0)
+        {
+            var passengerData = DepartureOperationParser.ParseMany(passengerTexts);
+            if (!string.IsNullOrWhiteSpace(passengerData.Servicios))
+                data.Servicios = passengerData.Servicios;
+        }
+
         var report = new List<string>
         {
             $"Fecha: {DateTime.Now:yyyy-MM-dd HH:mm:ss}",
