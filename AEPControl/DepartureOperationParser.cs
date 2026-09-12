@@ -47,7 +47,7 @@ public static class DepartureOperationParser
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex ServiceRegex = new(
-        $@"\b(?<code>HL[DO0][LR1I]|CSPY|SPM[2Z]|SPML[JYIV])\s*[:\-]?\s*(?<count>{OcrNumber})\b",
+        $@"\b(?<code>[CH]L[DO0][LR1I]|CSPY|SPM[2Z]|SPML[JYIV])\s*[:\-]?\s*(?<count>{OcrNumber})\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public static DepartureOperationData ParseMany(IEnumerable<string> readings)
@@ -138,22 +138,35 @@ public static class DepartureOperationParser
             }
         }
 
-        // Último fallback: CSPY/SPM2. No se consideran equivalentes obligatorios
-        // a los números de arriba porque en algunos ITO pueden diferir.
+        // Último fallback: reconstruir los totales desde las líneas de servicio.
+        // Algunos OCR no conservan la posición de J/Y, pero sí leen con precisión
+        // CLDL/HLDL, HLDR/SPM2 y los adicionales SPMLJ/SPMLY.
         if (string.IsNullOrWhiteSpace(result.Servicios))
         {
-            int? serviceJ = null;
-            int? serviceY = null;
+            int? baseJ = null;
+            int? baseY = null;
+            var extraJ = 0;
+            var extraY = 0;
+
             foreach (Match match in ServiceRegex.Matches(normalized))
             {
                 var code = NormalizeServiceCode(match.Groups["code"].Value);
                 var countText = NormalizeOcrNumber(match.Groups["count"].Value);
                 if (!int.TryParse(countText, out var count) || count < 0 || count > 399) continue;
-                if (code == "CSPY") serviceJ ??= count;
-                if (code == "SPM2") serviceY ??= count;
+
+                if (code is "CLDL" or "HLDL" or "CSPY") baseJ ??= count;
+                else if (code is "HLDR" or "SPM2") baseY ??= count;
+                else if (code == "SPMLJ") extraJ = Math.Max(extraJ, count);
+                else if (code == "SPMLY") extraY = Math.Max(extraY, count);
             }
-            if (serviceJ.HasValue && serviceY.HasValue)
-                result.Servicios = $"{serviceJ.Value}/{serviceY.Value}";
+
+            if (baseJ.HasValue && baseY.HasValue)
+            {
+                var totalJ = baseJ.Value + extraJ;
+                var totalY = baseY.Value + extraY;
+                if (totalJ <= 399 && totalY <= 399)
+                    result.Servicios = $"{totalJ}/{totalY}";
+            }
         }
 
         return result;
@@ -307,8 +320,12 @@ public static class DepartureOperationParser
     private static string NormalizeServiceCode(string value)
     {
         var code = value.ToUpperInvariant();
-        if (code.StartsWith("HL", StringComparison.Ordinal) && code.Length == 4)
-            return code[3] == 'R' ? "HLDR" : "HLDL";
+        if ((code.StartsWith("HL", StringComparison.Ordinal) ||
+             code.StartsWith("CL", StringComparison.Ordinal)) && code.Length == 4)
+        {
+            var prefix = code.StartsWith("CL", StringComparison.Ordinal) ? "CLD" : "HLD";
+            return code[3] == 'R' ? prefix + "R" : prefix + "L";
+        }
         if (code is "SPMLI" or "SPMLV")
             return code == "SPMLI" ? "SPMLJ" : "SPMLY";
         if (code == "SPMZ")
