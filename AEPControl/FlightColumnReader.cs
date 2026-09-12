@@ -124,11 +124,13 @@ public static class FlightColumnReader
         var times = ParseTimes(timeText);
         var bookings = ParseBookings(bookingText);
 
-        if (flights.Count == 0 || times.Count == 0)
+        // El número de vuelo alcanza para crear la fila. Hora, origen y booking
+        // se completan cuando sus columnas quedan alineadas; nunca se descartan
+        // todas las llegadas porque una de esas columnas falló en el OCR.
+        if (flights.Count == 0)
             return new List<FlightData>();
 
-        var rowCount = Math.Min(flights.Count, times.Count);
-        return BuildRows(flights, airports, times, bookings, rowCount);
+        return BuildRows(flights, airports, times, bookings, flights.Count);
     }
 
     // Salidas sólo necesita reconocer el número de vuelo. El resto de los
