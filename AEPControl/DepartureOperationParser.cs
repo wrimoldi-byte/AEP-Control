@@ -15,7 +15,11 @@ public static class DepartureOperationParser
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex RegistrationRegex = new(
-        @"\b(?<prefix>CC|PR|PS)\s*[-:]?\s*(?<suffix>[A-Z0-9]{3})\b",
+        // Windows OCR suele convertir el guion de la matrícula en "_", dejarlo
+        // separado por espacios o leerlo como raya. Aceptamos esas variantes,
+        // pero exigimos un prefijo aeronáutico conocido y exactamente tres
+        // caracteres para no fabricar matrículas desde otro texto del ITO.
+        @"\b(?<prefix>CC|PR|PS)\s*(?:[-:_–—]|\s)\s*(?<suffix>[A-Z0-9]{3})\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex RegistrationLabelRegex = new(
