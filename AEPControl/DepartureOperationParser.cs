@@ -66,16 +66,29 @@ public static class DepartureOperationParser
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .ToList();
 
+        // Elegimos primero los pasajeros y usamos ese dato para descartar una
+        // configuración imposible. Por ejemplo, si el panel indica Y146, una
+        // lectura OCR J16/Y136 es necesariamente un 5 confundido con un 3.
+        var services = visualPassengerValues.Count > 0
+            ? PickMostFrequent(visualPassengerValues)
+            : PickMostFrequent(parsed.Select(item => item.Servicios));
+        var configurations = parsed
+            .Select(item => item.Configuracion)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .ToList();
+        var plausibleConfigurations = configurations
+            .Where(configuration => ConfigurationCanHoldPassengers(configuration, services))
+            .ToList();
+
         return new DepartureOperationData
         {
             Vuelo = PickMostFrequent(parsed.Select(item => item.Vuelo)),
             Matricula = PickMostFrequent(parsed.Select(item => item.Matricula)),
-            Configuracion = PickMostFrequent(parsed.Select(item => item.Configuracion)),
+            Configuracion = PickMostFrequent(
+                plausibleConfigurations.Count > 0 ? plausibleConfigurations : configurations),
             // Para comidas/PAX manda el número visual debajo de J e Y.
             // CSPY/SPM2 se usa solamente si no logramos leer ese bloque.
-            Servicios = visualPassengerValues.Count > 0
-                ? PickMostFrequent(visualPassengerValues)
-                : PickMostFrequent(parsed.Select(item => item.Servicios))
+            Servicios = services
         };
     }
 
@@ -299,6 +312,21 @@ public static class DepartureOperationParser
 
     private static bool IsReasonablePassengerCount(string value) =>
         int.TryParse(value, out var number) && number >= 0 && number <= 399;
+
+    private static bool ConfigurationCanHoldPassengers(string configuration, string passengers)
+    {
+        var configurationParts = configuration.Split('/');
+        var passengerParts = passengers.Split('/');
+        if (configurationParts.Length != 2 || passengerParts.Length != 2)
+            return true;
+
+        return int.TryParse(configurationParts[0], out var configurationJ) &&
+               int.TryParse(configurationParts[1], out var configurationY) &&
+               int.TryParse(passengerParts[0], out var passengerJ) &&
+               int.TryParse(passengerParts[1], out var passengerY) &&
+               configurationJ >= passengerJ &&
+               configurationY >= passengerY;
+    }
 
     private static string NormalizeRegistrationSuffix(string value) => value
         .ToUpperInvariant()
