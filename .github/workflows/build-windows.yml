@@ -36,6 +36,9 @@ jobs:
       - name: Restaurar dependencias
         run: dotnet restore AEPControl/AEPControl.csproj
 
+      - name: Verificar regresiones de EDITS
+        run: dotnet run --project tests/EditRegression/EditRegression.csproj --configuration Release
+
       - name: Compilar ejecutable
         run: dotnet publish AEPControl/AEPControl.csproj --configuration Release --runtime win-x64 --self-contained true --output publish -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 

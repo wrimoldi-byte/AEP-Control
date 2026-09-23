@@ -23,7 +23,7 @@ public sealed class ContinuousSpecialReader
         public int LastFrame { get; set; }
     }
 
-    private sealed record ScreenRow(string Code, string Seat, string Passenger, string Canonical, bool HasExplicitName);
+    private sealed record ScreenRow(string Code, string Seat, string Passenger, string Canonical);
 
     private readonly Regex _codeRegex;
     private static readonly Regex SeatRegex = new(@"\b(?<seat>\d{1,2}[A-F])\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -92,7 +92,7 @@ public sealed class ContinuousSpecialReader
                 .Select(m => m.Value.ToUpperInvariant())
                 .Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                result.Add(new ScreenRow(code, seat, passenger, canonical, SlashNameRegex.IsMatch(line)));
+                result.Add(new ScreenRow(code, seat, passenger, canonical));
             }
         }
 
@@ -158,7 +158,6 @@ public sealed class ContinuousSpecialReader
     private static bool SameIdentity(ScreenRow a, ScreenRow b)
     {
         if (!a.Code.Equals(b.Code, StringComparison.OrdinalIgnoreCase)) return false;
-        if (DifferentPassengers(a.Passenger, b.Passenger)) return false;
 
         if (!string.IsNullOrWhiteSpace(a.Seat) && !string.IsNullOrWhiteSpace(b.Seat))
             return a.Seat.Equals(b.Seat, StringComparison.OrdinalIgnoreCase);
@@ -175,7 +174,6 @@ public sealed class ContinuousSpecialReader
         {
             var exactSeat = _confirmed.FirstOrDefault(c =>
                 c.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
-                !DifferentPassengers(c.Passenger, row.Passenger) &&
                 c.Seat.Equals(row.Seat, StringComparison.OrdinalIgnoreCase));
             if (exactSeat is not null)
             {
@@ -199,7 +197,6 @@ public sealed class ContinuousSpecialReader
 
         var sameConfirmedRow = _confirmed.Any(c =>
             c.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
-            !DifferentPassengers(c.Passenger, row.Passenger) &&
             CanonicalSimilarity(c.Canonical, row.Canonical) >= 0.82);
         if (sameConfirmedRow)
             return;
@@ -207,20 +204,6 @@ public sealed class ContinuousSpecialReader
         var pending = FindPending(row);
         if (pending is null)
         {
-            // An explicit passenger name or seat identifies an edit even if scrolling
-            // exposes that row for only one OCR frame.
-            if (!string.IsNullOrWhiteSpace(row.Seat) || row.HasExplicitName)
-            {
-                _confirmed.Add(new ConfirmedRow
-                {
-                    Code = row.Code,
-                    Seat = row.Seat,
-                    Passenger = row.Passenger,
-                    Canonical = row.Canonical
-                });
-                return;
-            }
-
             _pending.Add(new PendingRow
             {
                 Code = row.Code,
@@ -248,7 +231,7 @@ public sealed class ContinuousSpecialReader
             c.Code.Equals(pending.Code, StringComparison.OrdinalIgnoreCase) &&
             ((!string.IsNullOrWhiteSpace(pending.Seat) && c.Seat.Equals(pending.Seat, StringComparison.OrdinalIgnoreCase)) ||
              (!string.IsNullOrWhiteSpace(pending.Passenger) && !string.IsNullOrWhiteSpace(c.Passenger) && PassengerEquivalent(c.Passenger, pending.Passenger)) ||
-             (!DifferentPassengers(c.Passenger, pending.Passenger) && CanonicalSimilarity(c.Canonical, pending.Canonical) >= 0.82)));
+             CanonicalSimilarity(c.Canonical, pending.Canonical) >= 0.82));
 
         if (!duplicateConfirmed)
         {
@@ -284,8 +267,7 @@ public sealed class ContinuousSpecialReader
         }
 
         return _pending
-            .Where(p => p.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
-                        !DifferentPassengers(p.Passenger, row.Passenger))
+            .Where(p => p.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(p => CanonicalSimilarity(p.Canonical, row.Canonical))
             .FirstOrDefault(p => CanonicalSimilarity(p.Canonical, row.Canonical) >= 0.88);
     }
@@ -315,10 +297,6 @@ public sealed class ContinuousSpecialReader
         var sameFirst = aParts[1].Equals(bParts[1], StringComparison.OrdinalIgnoreCase) || Similarity(aParts[1], bParts[1]) >= 0.92;
         return sameLast && sameFirst;
     }
-
-    private static bool DifferentPassengers(string a, string b) =>
-        !string.IsNullOrWhiteSpace(a) && !string.IsNullOrWhiteSpace(b) &&
-        !StrongPassengerEquivalent(a, b);
 
     private static string NormalizeSeat(string value)
     {
@@ -449,8 +427,8 @@ public sealed class ContinuousSpecialReader
 
     private static bool SamePassengerForWheelchair(ConfirmedRow a, ConfirmedRow b)
     {
-        // Explicitly different passengers must never be merged by a reused seat
-        // or by similar SSR text.
+        // Across wheelchair types, never suppress a different named passenger.
+        // Within one type, OCR deduplication above remains tolerant of name noise.
         if (!string.IsNullOrWhiteSpace(a.Passenger) && !string.IsNullOrWhiteSpace(b.Passenger) &&
             !StrongPassengerEquivalent(a.Passenger, b.Passenger))
             return false;
