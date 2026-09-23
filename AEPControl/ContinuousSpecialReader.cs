@@ -57,7 +57,10 @@ public sealed class ContinuousSpecialReader
         _frame++;
         var current = ParseScreen(text);
         if (current.Count == 0)
+        {
+            _pending.RemoveAll(p => _frame - p.LastFrame > 2);
             return BuildCounts();
+        }
 
         current = DeduplicateCurrentScreen(current);
 
@@ -424,17 +427,18 @@ public sealed class ContinuousSpecialReader
 
     private static bool SamePassengerForWheelchair(ConfirmedRow a, ConfirmedRow b)
     {
+        // Across wheelchair types, never suppress a different named passenger.
+        // Within one type, OCR deduplication above remains tolerant of name noise.
+        if (!string.IsNullOrWhiteSpace(a.Passenger) && !string.IsNullOrWhiteSpace(b.Passenger) &&
+            !StrongPassengerEquivalent(a.Passenger, b.Passenger))
+            return false;
+
         if (!string.IsNullOrWhiteSpace(a.Seat) && !string.IsNullOrWhiteSpace(b.Seat) &&
             a.Seat.Equals(b.Seat, StringComparison.OrdinalIgnoreCase))
             return true;
 
         if (!string.IsNullOrWhiteSpace(a.Passenger) && !string.IsNullOrWhiteSpace(b.Passenger) &&
             StrongPassengerEquivalent(a.Passenger, b.Passenger))
-            return true;
-
-        if (string.IsNullOrWhiteSpace(a.Passenger) && string.IsNullOrWhiteSpace(b.Passenger) &&
-            string.IsNullOrWhiteSpace(a.Seat) && string.IsNullOrWhiteSpace(b.Seat) &&
-            CanonicalSimilarity(a.Canonical, b.Canonical) >= 0.94)
             return true;
 
         return ReferenceEquals(a, b);
