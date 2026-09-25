@@ -139,11 +139,11 @@ public sealed class ContinuousSpecialReader
 
         foreach (var row in rows)
         {
-            var duplicate = result.Any(r => SameIdentity(r, row) ||
+            var duplicate = result.Any(r =>
+                SameIdentity(r, row) ||
                 (r.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
-                 string.IsNullOrWhiteSpace(r.Seat) && string.IsNullOrWhiteSpace(row.Seat) &&
-                 string.IsNullOrWhiteSpace(r.Passenger) && string.IsNullOrWhiteSpace(row.Passenger) &&
-                 CanonicalSimilarity(r.Canonical, row.Canonical) >= 0.90));
+                 (CanonicalSimilarity(r.Canonical, row.Canonical) >= 0.90 ||
+                  PartialCanonicalMatch(row.Code, r.Canonical, row.Canonical))));
 
             if (!duplicate)
                 result.Add(row);
@@ -194,7 +194,8 @@ public sealed class ContinuousSpecialReader
 
         var sameConfirmedRow = _confirmed.Any(c =>
             c.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase) &&
-            CanonicalSimilarity(c.Canonical, row.Canonical) >= 0.82);
+            (CanonicalSimilarity(c.Canonical, row.Canonical) >= 0.82 ||
+             PartialCanonicalMatch(row.Code, c.Canonical, row.Canonical)));
         if (sameConfirmedRow)
             return;
 
@@ -228,7 +229,8 @@ public sealed class ContinuousSpecialReader
             c.Code.Equals(pending.Code, StringComparison.OrdinalIgnoreCase) &&
             ((!string.IsNullOrWhiteSpace(pending.Seat) && c.Seat.Equals(pending.Seat, StringComparison.OrdinalIgnoreCase)) ||
              (!string.IsNullOrWhiteSpace(pending.Passenger) && !string.IsNullOrWhiteSpace(c.Passenger) && PassengerEquivalent(c.Passenger, pending.Passenger)) ||
-             CanonicalSimilarity(c.Canonical, pending.Canonical) >= 0.82));
+             CanonicalSimilarity(c.Canonical, pending.Canonical) >= 0.82 ||
+             PartialCanonicalMatch(pending.Code, c.Canonical, pending.Canonical)));
 
         if (!duplicateConfirmed)
         {
@@ -266,7 +268,9 @@ public sealed class ContinuousSpecialReader
         return _pending
             .Where(p => p.Code.Equals(row.Code, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(p => CanonicalSimilarity(p.Canonical, row.Canonical))
-            .FirstOrDefault(p => CanonicalSimilarity(p.Canonical, row.Canonical) >= 0.88);
+            .FirstOrDefault(p =>
+                CanonicalSimilarity(p.Canonical, row.Canonical) >= 0.88 ||
+                PartialCanonicalMatch(row.Code, p.Canonical, row.Canonical));
     }
 
     private static void UpdateCanonical(ConfirmedRow row, string canonical)
@@ -278,8 +282,23 @@ public sealed class ContinuousSpecialReader
     private static bool PassengerEquivalent(string a, string b)
     {
         if (a.Equals(b, StringComparison.OrdinalIgnoreCase)) return true;
+
+        var aParts = a.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var bParts = b.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        // El scroll suele cambiar 1 letra del apellido o nombre. Comparamos las dos partes
+        // por separado para reconocer al mismo pasajero sin fusionar nombres distintos.
+        if (aParts.Length >= 2 && bParts.Length >= 2)
+        {
+            var sameLast = aParts[0].Equals(bParts[0], StringComparison.OrdinalIgnoreCase) ||
+                           Similarity(aParts[0], bParts[0]) >= 0.84;
+            var sameFirst = aParts[1].Equals(bParts[1], StringComparison.OrdinalIgnoreCase) ||
+                            Similarity(aParts[1], bParts[1]) >= 0.84;
+            return sameLast && sameFirst;
+        }
+
         if (a.Length < 6 || b.Length < 6) return false;
-        return Similarity(a, b) >= 0.88;
+        return Similarity(a, b) >= 0.90;
     }
 
     private static bool StrongPassengerEquivalent(string a, string b)
@@ -290,8 +309,8 @@ public sealed class ContinuousSpecialReader
         var bParts = b.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (aParts.Length < 2 || bParts.Length < 2) return false;
 
-        var sameLast = aParts[0].Equals(bParts[0], StringComparison.OrdinalIgnoreCase) || Similarity(aParts[0], bParts[0]) >= 0.92;
-        var sameFirst = aParts[1].Equals(bParts[1], StringComparison.OrdinalIgnoreCase) || Similarity(aParts[1], bParts[1]) >= 0.92;
+        var sameLast = aParts[0].Equals(bParts[0], StringComparison.OrdinalIgnoreCase) || Similarity(aParts[0], bParts[0]) >= 0.88;
+        var sameFirst = aParts[1].Equals(bParts[1], StringComparison.OrdinalIgnoreCase) || Similarity(aParts[1], bParts[1]) >= 0.88;
         return sameLast && sameFirst;
     }
 
@@ -313,6 +332,31 @@ public sealed class ContinuousSpecialReader
     {
         if (a.Equals(b, StringComparison.OrdinalIgnoreCase)) return 1;
         return Math.Max(Similarity(a, b), TokenSimilarity(a, b));
+    }
+
+    private static bool PartialCanonicalMatch(string code, string a, string b)
+    {
+        // Al scrollear Sabre puede dejar una fila cortada arriba/abajo. En ese caso la
+        // similitud de la cadena completa cae mucho aunque sea exactamente el mismo EDIT.
+        // Comparamos solo tokens distintivos y exigimos al menos dos coincidencias.
+        var aTokens = StableTokens(a)
+            .Where(t => !t.Equals(code, StringComparison.OrdinalIgnoreCase))
+            .Where(t => !IgnoredNameTokens.Contains(t))
+            .ToList();
+        var bTokens = StableTokens(b)
+            .Where(t => !t.Equals(code, StringComparison.OrdinalIgnoreCase))
+            .Where(t => !IgnoredNameTokens.Contains(t))
+            .ToList();
+
+        if (aTokens.Count < 2 || bTokens.Count < 2)
+            return false;
+
+        var intersection = aTokens.Intersect(bTokens, StringComparer.OrdinalIgnoreCase).Count();
+        if (intersection < 2)
+            return false;
+
+        var coverage = (double)intersection / Math.Min(aTokens.Count, bTokens.Count);
+        return coverage >= 0.70;
     }
 
     private static double TokenSimilarity(string a, string b)
