@@ -3,7 +3,7 @@ using System.Reflection;
 
 namespace AEPControl;
 
-public sealed class BubbleMainForm : Form
+public sealed partial class BubbleMainForm : Form
 {
     private readonly BindingList<FlightData> _arrivals = new();
     private readonly BindingList<FlightData> _departures = new();
@@ -25,7 +25,7 @@ public sealed class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v2.24";
+        Text = "AEP Control v2.25 — OCR / IA y edición";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1280, 720);
         TopMost = true;
@@ -98,8 +98,9 @@ public sealed class BubbleMainForm : Form
         _departureGrid.Enter += (_, _) => _arrivalGrid.ClearSelection();
         _arrivalGrid.SelectionChanged += (_, _) => UpdateSelectedFlightStatus();
         _departureGrid.SelectionChanged += (_, _) => UpdateSelectedFlightStatus();
-        _arrivalGrid.CellDoubleClick += async (_, e) => { if (e.RowIndex >= 0) await StartBubbleAsync(); };
-        _departureGrid.CellDoubleClick += async (_, e) => { if (e.RowIndex >= 0) await StartBubbleAsync(); };
+        _arrivalGrid.CellDoubleClick += (_, e) => { if (e.RowIndex >= 0) EditSelectedFlight(); };
+        _departureGrid.CellDoubleClick += (_, e) => { if (e.RowIndex >= 0) EditSelectedFlight(); };
+        ConfigureVisionAndEditing(bar);
 
         var arrivalBox = new GroupBox { Text = "LLEGADAS", Dock = DockStyle.Fill, Padding = new Padding(8), BackColor = Color.FromArgb(239, 247, 251), ForeColor = Color.FromArgb(18, 57, 91), Font = new Font("Segoe UI", 9, FontStyle.Bold) };
         arrivalBox.Controls.Add(_arrivalGrid);
@@ -117,6 +118,8 @@ public sealed class BubbleMainForm : Form
         Controls.AddRange(new Control[] { split, bar, hero });
         FormClosed += (_, _) =>
         {
+            _cts?.Cancel();
+            _visionCts?.Cancel();
             BackgroundImage = null;
             hero.HeroImage = null;
             _backgroundImage?.Dispose();
@@ -130,6 +133,8 @@ public sealed class BubbleMainForm : Form
         grid.AutoGenerateColumns = false;
         grid.DataSource = source;
         grid.AllowUserToAddRows = false;
+        grid.AllowUserToDeleteRows = false;
+        grid.ReadOnly = true;
         grid.RowHeadersVisible = false;
         grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
         grid.MultiSelect = false;
@@ -156,6 +161,7 @@ public sealed class BubbleMainForm : Form
             grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "SVCS", DataPropertyName = nameof(FlightData.Servicios) });
         }
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "EDITS", DataPropertyName = nameof(FlightData.Edits) });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Revisión", DataPropertyName = nameof(FlightData.Revision), FillWeight = 55 });
     }
 
     private IEnumerable<FlightData> AllFlights() => _arrivals.Concat(_departures);
@@ -204,6 +210,8 @@ public sealed class BubbleMainForm : Form
 
     private void ResetFlow()
     {
+        _visionCts?.Cancel();
+        _visionSpecials.Clear();
         _cts?.Cancel();
         _bubble?.Close();
         _arrivals.Clear();
@@ -228,6 +236,7 @@ public sealed class BubbleMainForm : Form
 
     private async Task ScanFlightsAsync(string movement)
     {
+        if (UseVision) { await CaptureWithVisionAsync("flights", movement); return; }
         Hide();
         await Task.Delay(250);
         using var selector = new SelectionForm();
@@ -332,10 +341,8 @@ public sealed class BubbleMainForm : Form
         var target = movement.Equals("Llegada", StringComparison.OrdinalIgnoreCase)
             ? _arrivals
             : _departures;
-        target.Clear();
-
         foreach (var flight in usableFlights.OrderBy(x => x.Hora).ThenBy(x => x.Vuelo))
-            target.Add(flight);
+            MergeRecognizedFlight(target, flight);
 
         _export.Enabled = AllFlights().Any();
         _action.Visible = true;
@@ -357,6 +364,7 @@ public sealed class BubbleMainForm : Form
 
     private async Task ReadDepartureOperationAsync()
     {
+        if (UseVision) { await CaptureWithVisionAsync("ito", "Salida"); return; }
         if (_departures.Count == 0)
         {
             MessageBox.Show("Primero leé la lista de vuelos de salida.", "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -405,9 +413,9 @@ public sealed class BubbleMainForm : Form
                 return;
             }
 
-            if (!string.IsNullOrWhiteSpace(data.Matricula)) target.Matricula = data.Matricula;
-            if (!string.IsNullOrWhiteSpace(data.Configuracion)) target.Configuracion = data.Configuracion;
-            if (!string.IsNullOrWhiteSpace(data.Servicios)) target.Servicios = data.Servicios;
+            FlightCorrections.ApplyText(target, nameof(FlightData.Matricula), data.Matricula);
+            FlightCorrections.ApplyText(target, nameof(FlightData.Configuracion), data.Configuracion);
+            FlightCorrections.ApplyText(target, nameof(FlightData.Servicios), data.Servicios);
 
             _departureGrid.Refresh();
             _export.Enabled = true;
@@ -472,6 +480,7 @@ public sealed class BubbleMainForm : Form
 
     private async Task StartBubbleAsync()
     {
+        if (UseVision) { await CaptureWithVisionAsync("specials", ""); return; }
         var f = GetSelectedFlight();
         if (f is null)
         {
@@ -521,6 +530,7 @@ public sealed class BubbleMainForm : Form
 
     private static void CopyCounts(FlightData f, SpecialCounts c)
     {
+        if (f.ManualFields.Contains(nameof(FlightData.Edits))) return;
         f.WCHR = c.WCHR; f.WCHS = c.WCHS; f.WCHC = c.WCHC; f.AVIH = c.AVIH; f.INF = c.INF; f.ETO = c.ETO;
         f.UMNR = c.UMNR; f.PETC = c.PETC; f.DEAF = c.DEAF; f.BLND = c.BLND; f.MAAS = c.MAAS;
         f.STCR = c.STCR; f.MEDA = c.MEDA; f.WCLB = c.WCLB; f.WCMP = c.WCMP; f.SVAN = c.SVAN;

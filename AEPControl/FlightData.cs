@@ -2,6 +2,9 @@ namespace AEPControl;
 
 public sealed class FlightData
 {
+    public HashSet<string> ManualFields { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public string Revision => ManualFields.Count > 0 ? "Manual" : "";
+    public string SourceFlight { get; set; } = "";
     public string Movimiento { get; set; } = "";
     public string Vuelo { get; set; } = "";
     public string Destino { get; set; } = "";
