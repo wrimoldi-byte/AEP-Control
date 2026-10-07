@@ -24,7 +24,7 @@ public sealed partial class BubbleMainForm
                 : "OCR local: lectura continua mientras hacés scroll. Doble clic en un vuelo para editar sus datos; botón Leer EDITS para escanear.";
         };
         var configure = new Button { Text = "Configurar IA", AutoSize = true };
-        configure.Click += (_, _) => { using var dialog = new VisionSettingsForm(); dialog.ShowDialog(this); };
+        configure.Click += (_, _) => { using var dialog = new VisionSettingsForm(); ShowForegroundDialog(dialog); };
         var edit = new Button { Text = "Editar vuelo / EDITS", AutoSize = true };
         edit.Click += (_, _) => EditSelectedFlight();
         var reread = new Button { Text = "Permitir releer", AutoSize = true };
@@ -51,6 +51,24 @@ public sealed partial class BubbleMainForm
         }
     }
 
+    private DialogResult ShowForegroundDialog(Form dialog)
+    {
+        var wasTopMost = TopMost;
+        try
+        {
+            TopMost = false;
+            dialog.TopMost = true;
+            dialog.StartPosition = FormStartPosition.CenterParent;
+            dialog.Shown += (_, _) => { dialog.BringToFront(); dialog.Activate(); };
+            return dialog.ShowDialog(this);
+        }
+        finally
+        {
+            TopMost = wasTopMost;
+            if (!IsDisposed) { BringToFront(); Activate(); }
+        }
+    }
+
     private void EditSelectedFlight()
     {
         if (_visionBusy) return;
@@ -58,7 +76,7 @@ public sealed partial class BubbleMainForm
         if (selected is null) { MessageBox.Show(this, "Seleccioná un vuelo primero.", "Editar vuelo"); return; }
         var oldFlight = selected.Vuelo;
         using var editor = new FlightEditorForm(selected);
-        if (editor.ShowDialog(this) != DialogResult.OK) return;
+        if (ShowForegroundDialog(editor) != DialogResult.OK) return;
         if (oldFlight != selected.Vuelo && selected.SourceFlight.Length == 0) selected.SourceFlight = oldFlight;
         _arrivals.ResetBindings(); _departures.ResetBindings();
         _export.Enabled = AllFlights().Any();
@@ -93,7 +111,7 @@ public sealed partial class BubbleMainForm
         if (settings.ProtectedKey.Length == 0 || !settings.FreeProjectConfirmed)
         {
             using var setup = new VisionSettingsForm();
-            if (setup.ShowDialog(this) != DialogResult.OK) return;
+            if (ShowForegroundDialog(setup) != DialogResult.OK) return;
             settings = VisionSettings.Load();
             if (settings.ProtectedKey.Length == 0 || !settings.FreeProjectConfirmed) return;
         }
@@ -111,7 +129,7 @@ public sealed partial class BubbleMainForm
                 graphics.CopyFromScreen(selector.SelectedArea.Location, Point.Empty, selector.SelectedArea.Size);
             Show(); Activate();
             using (var preview = new VisionCaptureDialog(bitmap))
-                if (preview.ShowDialog(this) != DialogResult.OK) return;
+                if (ShowForegroundDialog(preview) != DialogResult.OK) return;
             settings.ReserveRequest();
             Enabled = false;
             _status.Text = $"Consultando Gemini ({settings.RequestsToday}/{settings.DailyLimit})…";
@@ -123,7 +141,7 @@ public sealed partial class BubbleMainForm
                 VisionResult.FlightNumber(result.Ito.Vuelo) != VisionResult.FlightNumber(selected.SourceFlight))
                 throw new InvalidOperationException($"La captura corresponde a {result.Ito.Vuelo}, pero seleccionaste {selected.Vuelo}. No se cargaron los datos.");
             using (var review = new VisionCaptureDialog(bitmap, Summary(result, kind, selected?.Vuelo ?? movement)))
-                if (review.ShowDialog(this) != DialogResult.OK) { _status.Text = "Respuesta descartada. Los datos anteriores se conservan."; return; }
+                if (ShowForegroundDialog(review) != DialogResult.OK) { _status.Text = "Respuesta descartada. Los datos anteriores se conservan."; return; }
             if (kind == "flights")
             {
                 if (result.Flights.Count == 0) throw new InvalidOperationException("No se reconocieron vuelos. Los anteriores se conservan.");
