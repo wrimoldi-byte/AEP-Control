@@ -36,28 +36,31 @@ jobs:
       - name: Restaurar dependencias
         run: dotnet restore AEPControl/AEPControl.csproj
 
+      - name: Verificar IA, edición y Excel
+        run: dotnet run --project Tests/Tests.csproj --configuration Release
+
       - name: Compilar ejecutable
         run: dotnet publish AEPControl/AEPControl.csproj --configuration Release --runtime win-x64 --self-contained true --output publish -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 
-      - name: Subir AEP Control v2.24 como artifact
+      - name: Subir AEP Control v2.25 como artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AEP-Control-v2.24-win-x64
+          name: AEP-Control-v2.25-win-x64
           path: publish/AEPControl.exe
           if-no-files-found: error
           retention-days: 30
 
-      - name: Crear o actualizar Release v2.24
+      - name: Crear o actualizar Release v2.25
         if: github.event_name != 'pull_request'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "v2.24"
+          $tag = "v2.25"
           $asset = "publish/AEPControl.exe"
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.24" --notes "Configuración modal corregida y siempre visible para agregar EDITS. Nueva interfaz profesional con fondo de agua y avión LATAM, grillas estilizadas y legibilidad reforzada. Conserva todas las funciones OCR y Excel."
+            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.25" --notes "Captura directa por Gemini opcional, OCR local conservado, edición manual de vuelos, EDITS e ITO, protección de correcciones y exportación Excel. Configurar clave propia de Google sin facturación; verificar límites y datos antes de uso operativo."
           } else {
             gh release upload $tag $asset --repo $env:GITHUB_REPOSITORY --clobber
           }

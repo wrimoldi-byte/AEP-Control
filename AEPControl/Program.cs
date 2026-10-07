@@ -7,7 +7,6 @@ internal static class Program
     {
         ApplicationConfiguration.Initialize();
         var form = new BubbleMainForm();
-        FlightSelectionEnhancer.Attach(form);
         Application.Run(form);
     }
 }

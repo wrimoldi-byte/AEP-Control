@@ -1,4 +1,4 @@
-# AEP Control v2.24
+# AEP Control v2.25
 
 Prototipo portátil para Windows que lee por OCR la tabla de vuelos del siguiente turno.
 
@@ -13,7 +13,7 @@ El OCR se procesa localmente con el motor de Windows. No se conecta a Sabre ni e
 
 ## Descargar el EXE
 
-Entrar en **Actions**, abrir la ejecución más reciente y descargar el artefacto **AEPControl-Windows-v0.1**.
+Entrar en **Actions**, abrir la ejecución más reciente y descargar el artefacto **AEP-Control-v2.25-win-x64**.
 
 ## Requisitos
 
@@ -56,3 +56,22 @@ Esta versión es una prueba inicial. El resultado debe revisarse antes de utiliz
 - El Excel conserva PAX como `PE/Economy` (por ejemplo `7/14`) y ya no suma ambas cabinas.
 - La lectura continua de EDITS reconoce `INF` y `ETO` y los exporta en sus columnas dedicadas.
 - El Excel usa un formato operativo profesional con bloques separados de arribos y salidas, encabezados jerarquizados, filas alternadas, ETD destacado y panel congelado.
+
+## v2.25: captura IA y edición manual
+
+- Selector **OCR local (Windows) / IA Gemini (captura)**. El modo local sigue funcionando sin conexión.
+- En IA, **Leer llegadas**, **Leer salidas**, **INFO DE ITO** y **Leer EDITS** capturan directamente una imagen y la envían a Gemini. No pasa por OCR de Windows. Documentación PAX conserva exclusivamente su lectura local.
+- Una consulta por clic. Para listas largas, capturar cada página quieta. Los vuelos se fusionan y EDITS se acumula por identidad visible del pasajero; repetir una misma fila identificada no suma dos veces. Identidades mal leídas aún requieren revisión.
+- Revisar el recorte antes de enviarlo y la respuesta antes de cargarla. Los campos ilegibles quedan vacíos y se presentan advertencias.
+- **Configurar IA**: ingresar clave propia de Google AI Studio y modelo con visión. La clave se cifra con DPAPI del usuario Windows y no se incluye en código ni en el EXE.
+- Usar un proyecto de Google **sin facturación habilitada**. La aplicación no puede verificar ese estado ni garantizar que el proveedor mantenga una cuota gratuita. No habilita facturación, cambia modelos o reintenta consultas automáticamente. HTTP 429 detiene la consulta. Límite local configurable, 100 solicitudes diarias por defecto (también cuentan intentos fallidos).
+- Google puede utilizar contenido del nivel gratuito para mejorar productos. No enviar datos personales, sensibles o confidenciales. Probar con capturas ficticias o anonimizadas; verificar la política de la empresa antes de usar imágenes operativas. No se envía nada al ejecutar pruebas automáticas.
+- **Doble clic** en un vuelo o **Editar vuelo / EDITS** abre el editor. Se pueden corregir vuelo, aeropuerto, hora, equipo, PE/ECO, matrícula, configuración, servicios y cantidades EDITS. Un código por línea: `WCHR 2`. Borrar una línea quita ese código; códigos adicionales se permiten con 3–6 caracteres.
+- Campos modificados se marcan **Manual**, se conservan frente a nuevas capturas locales o IA y se exportan al Excel, incluyendo INF/ETO en columnas propias. **Permitir releer** desprotege los campos y reinicia la acumulación IA de EDITS, sin borrar los valores actuales hasta una lectura nueva.
+- La regla WCHC > WCHS > WCHR solo se aplica al mismo pasajero en capturas IA. Pasajeros distintos se cuentan por separado.
+- Los datos del turno y sus protecciones permanecen en memoria durante la sesión; Reiniciar o cerrar limpia el turno. Exportar Excel antes de cerrar.
+
+### Verificación
+
+`dotnet run --project Tests/Tests.csproj --configuration Release` (Windows y .NET 8).
+Pruebas de respuestas estructuradas, 3/5 sin reemplazos arbitrarios, deduplicación, prioridad de sillas por pasajero, edición real WinForms, protección de correcciones, DPAPI, solicitudes simuladas, errores de cuota y exportación XLSX. La lectura real necesita una clave propia y capturas de prueba; no se garantiza exactitud del modelo.
