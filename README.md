@@ -1,4 +1,4 @@
-# AEP Control v2.25
+# AEP Control v2.25.1
 
 Prototipo portátil para Windows que lee por OCR la tabla de vuelos del siguiente turno.
 
@@ -13,7 +13,7 @@ El OCR se procesa localmente con el motor de Windows. No se conecta a Sabre ni e
 
 ## Descargar el EXE
 
-Entrar en **Actions**, abrir la ejecución más reciente y descargar el artefacto **AEP-Control-v2.25-win-x64**.
+Entrar en **Actions**, abrir la ejecución más reciente y descargar el artefacto **AEP-Control-v2.25.1-win-x64**.
 
 ## Requisitos
 
@@ -75,3 +75,7 @@ Esta versión es una prueba inicial. El resultado debe revisarse antes de utiliz
 
 `dotnet run --project Tests/Tests.csproj --configuration Release` (Windows y .NET 8).
 Pruebas de respuestas estructuradas, 3/5 sin reemplazos arbitrarios, deduplicación, prioridad de sillas por pasajero, edición real WinForms, protección de correcciones, DPAPI, solicitudes simuladas, errores de cuota y exportación XLSX. La lectura real necesita una clave propia y capturas de prueba; no se garantiza exactitud del modelo.
+
+## v2.25.1
+
+Configuración IA, editor y revisión de capturas se abren delante de la ventana principal. Configurar IA muestra instrucciones de clave, modelo y límite. El enlace a Google AI Studio minimiza el diálogo para dejar trabajar en el navegador; volver a la configuración desde la barra de tareas después de copiar la clave.
