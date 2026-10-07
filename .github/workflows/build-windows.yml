@@ -42,25 +42,25 @@ jobs:
       - name: Compilar ejecutable
         run: dotnet publish AEPControl/AEPControl.csproj --configuration Release --runtime win-x64 --self-contained true --output publish -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 
-      - name: Subir AEP Control v2.25.1 como artifact
+      - name: Subir AEP Control v2.25.2 como artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AEP-Control-v2.25.1-win-x64
+          name: AEP-Control-v2.25.2-win-x64
           path: publish/AEPControl.exe
           if-no-files-found: error
           retention-days: 30
 
-      - name: Crear o actualizar Release v2.25.1
+      - name: Crear o actualizar Release v2.25.2
         if: github.event_name != 'pull_request'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "v2.25.1"
+          $tag = "v2.25.2"
           $asset = "publish/AEPControl.exe"
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.25.1" --notes "Corrige ventanas de configuración IA, edición y revisión que quedaban detrás de la ventana principal. Agrega instrucciones paso a paso para configurar la clave de Gemini. Conserva OCR, captura IA, edición y Excel."
+            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.25.2" --notes "Refuerza lectura de horas de vuelos por IA, normaliza formatos de hora y fecha con hora, y avisa por vuelo cuando falta la hora. Conserva edición manual, OCR e IA."
           } else {
             gh release upload $tag $asset --repo $env:GITHUB_REPOSITORY --clobber
           }

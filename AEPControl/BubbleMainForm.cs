@@ -25,7 +25,7 @@ public sealed partial class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v2.25.1 — OCR / IA y edición";
+        Text = "AEP Control v2.25.2 — OCR / IA y edición";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1280, 720);
         TopMost = true;

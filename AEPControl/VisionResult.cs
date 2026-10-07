@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Globalization;
 
 namespace AEPControl;
 
@@ -23,8 +24,11 @@ public sealed class VisionResult
             if (number.Length == 0) { result.Warnings.Add("Una fila no tiene vuelo legible y se omitió."); continue; }
             var airport = Text(item, "airport").ToUpperInvariant();
             if (airport.Length > 0 && !Regex.IsMatch(airport, @"^[A-Z]{3}$")) { airport = ""; result.Warnings.Add($"{number}: aeropuerto inválido."); }
-            var hour = Text(item, "time");
-            if (hour.Length > 0 && !Regex.IsMatch(hour, @"^(?:[01]\d|2[0-3]):[0-5]\d$")) { hour = ""; result.Warnings.Add($"{number}: hora inválida."); }
+            var rawHour = Text(item, "time");
+            var hour = NormalizeTime(rawHour);
+            if (hour.Length == 0) result.Warnings.Add(rawHour.Length == 0
+                ? $"{number}: la IA no leyó la hora. Incluí la columna y su encabezado en la captura o completala manualmente."
+                : $"{number}: hora no reconocida ({rawHour}). Revisá el dato original.");
             var pe = Text(item, "premium");
             var eco = Text(item, "economy");
             var known = int.TryParse(pe, out var p) && p is >= 0 and <= 999;
@@ -49,6 +53,19 @@ public sealed class VisionResult
     }
 
     private static string Text(JsonElement item, string key) => (item.GetProperty(key).GetString() ?? "").Trim();
+    public static string NormalizeTime(string value)
+    {
+        var text = value.Trim().ToUpperInvariant();
+        text = Regex.Replace(text, @"^(?:ETA|ETD|STA|STD|HORA)\s*[:=]?\s*", "");
+        var formats = new[] { "H:mm", "HH:mm", "H:mm:ss", "HH:mm:ss", "H.mm", "HH.mm", "HHmm", "HHmmss", "h:mm tt", "hh:mm tt" };
+        if (DateTime.TryParseExact(text, formats, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out var time))
+            return time.ToString("HH:mm", CultureInfo.InvariantCulture);
+        // Dates are allowed only when followed by a clearly separated clock time.
+        var match = Regex.Match(text, @"(?:\s|T)(\d{1,2}:\d{2}(?::\d{2})?(?:\s+[AP]M)?)Z?$");
+        if (match.Success && DateTime.TryParseExact(match.Groups[1].Value, formats, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out time))
+            return time.ToString("HH:mm", CultureInfo.InvariantCulture);
+        return "";
+    }
     public static string FlightNumber(string value)
     {
         var compact = Regex.Replace(value.ToUpperInvariant(), @"\s+", "");

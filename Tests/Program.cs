@@ -27,6 +27,12 @@ internal static class Program
         var parsed = VisionResult.Parse(Fixture());
         Check(parsed.Flights.Single().Vuelo == "LA8035" && parsed.Flights.Single().Economy == 156, "IA preserves 156 without 3/5 substitution");
         Check(parsed.Ito.Configuracion == "12/156", "ITO configuration separators preserved");
+        foreach (var input in new[] { "7:05", "07:05:00", "0705", "07.05", "07/10/2026 07:05", "2026-10-07T07:05:00Z", "ETA 07:05" })
+            Check(VisionResult.NormalizeTime(input) == "07:05", "Time normalized: " + input);
+        Check(VisionResult.NormalizeTime("3:30 PM") == "15:30", "AM/PM time normalized to 24 hours");
+        foreach (var input in new[] { "", "25:30", "12:78", "8035", "07/10/2026", "7/156" })
+            Check(VisionResult.NormalizeTime(input) == "", "Not a clock time: " + input);
+        Check(VisionResult.Parse(Fixture().Replace("12:30", "")).Warnings.Any(w => w.Contains("no leyó la hora")), "Missing time is reported per flight");
         Check(!VisionResult.Parse(Fixture().Replace("\"156\"", "\"unclear\"")).Flights.Single().BookingKnown, "Ambiguous booking remains unknown");
         var accumulator = new VisionSpecialAccumulator();
         accumulator.Add(parsed.Specials);
