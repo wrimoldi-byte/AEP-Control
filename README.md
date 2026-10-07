@@ -1,4 +1,4 @@
-# AEP Control v2.25.1
+# AEP Control v2.25.2
 
 Prototipo portátil para Windows que lee por OCR la tabla de vuelos del siguiente turno.
 
@@ -13,7 +13,7 @@ El OCR se procesa localmente con el motor de Windows. No se conecta a Sabre ni e
 
 ## Descargar el EXE
 
-Entrar en **Actions**, abrir la ejecución más reciente y descargar el artefacto **AEP-Control-v2.25.1-win-x64**.
+Entrar en **Actions**, abrir la ejecución más reciente y descargar el artefacto **AEP-Control-v2.25.2-win-x64**.
 
 ## Requisitos
 
@@ -79,3 +79,7 @@ Pruebas de respuestas estructuradas, 3/5 sin reemplazos arbitrarios, deduplicaci
 ## v2.25.1
 
 Configuración IA, editor y revisión de capturas se abren delante de la ventana principal. Configurar IA muestra instrucciones de clave, modelo y límite. El enlace a Google AI Studio minimiza el diálogo para dejar trabajar en el navegador; volver a la configuración desde la barra de tareas después de copiar la clave.
+
+## v2.25.2
+
+Refuerza las instrucciones de lectura de la hora por fila y movimiento. Normaliza horas H:mm, HHmm, HH:mm:ss, AM/PM y fechas seguidas de hora a HH:mm. Cada hora ilegible, ausente o inválida genera una advertencia por vuelo antes de cargar. No inventa horarios ni convierte zonas horarias.

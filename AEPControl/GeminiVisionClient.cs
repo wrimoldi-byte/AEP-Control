@@ -23,6 +23,12 @@ public sealed class GeminiVisionClient
             No inventes, completes por conocimientos previos ni cambies 3 por 5 automáticamente.
             Si un carácter o número es dudoso, dejá el campo vacío y explicalo en warnings.
             flights: solo filas completas de la tabla de vuelos. airport es origen en Llegada y destino en Salida.
+            time es la hora de la MISMA FILA del vuelo. Leé explícitamente la columna Hora/ETA/STA para Llegada
+            y Hora/ETD/STD para Salida; conservá la hora de la tabla sin convertir zona horaria.
+            Devolvela en 24 horas HH:mm: 7:05 -> 07:05, 1530 -> 15:30, 15:30:00 -> 15:30.
+            Si la celda incluye una fecha, devolvé solo su hora. No confundas fecha, número de vuelo o booking con hora.
+            Si hay varias columnas de hora y no es claro cuál corresponde, dejá time vacío y explicá los encabezados en warnings.
+            Antes de responder verificá time en cada fila. Si no podés leerlo, agregá una advertencia para ese vuelo.
             premium y economy son cantidades separadas, nunca el total. strings vacíos para lo desconocido.
             ito: vuelo visible, matrícula, configuración exacta (conservá separadores), servicios con código y cantidad.
             No deduzcas configuración por tipo de avión. Diferenciá cuidadosamente 3/5 y 136/156.
@@ -80,7 +86,7 @@ public sealed class GeminiVisionClient
         object Text() => new { type = "STRING" };
         object Object(Dictionary<string, object> fields) => new { type = "OBJECT", properties = fields, required = fields.Keys.ToArray() };
         object Array(object item) => new { type = "ARRAY", items = item };
-        var flights = Object(new() { ["flight"] = Text(), ["airport"] = Text(), ["time"] = Text(),
+        var flights = Object(new() { ["flight"] = Text(), ["airport"] = Text(), ["time"] = new { type = "STRING", description = "Hora visible de esta fila: llegada ETA/STA o salida ETD/STD, formato HH:mm de 24 horas. Vacío únicamente si ilegible o ausente; advertir en warnings." },
             ["equipment"] = Text(), ["premium"] = Text(), ["economy"] = Text() });
         var ito = Object(new() { ["flight"] = Text(), ["registration"] = Text(), ["configuration"] = Text(), ["services"] = Text() });
         var specials = Object(new() { ["identity"] = Text(), ["codes"] = Array(Text()) });
