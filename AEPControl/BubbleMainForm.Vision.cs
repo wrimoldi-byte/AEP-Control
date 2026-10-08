@@ -20,12 +20,12 @@ public sealed partial class BubbleMainForm
         {
             _status.Text = UseVision ? "IA: una captura por clic. Volvé a capturar cada página al hacer scroll." : "OCR local: lectura continua disponible.";
             _help.Text = UseVision
-                ? "IA Gemini: capturá una pantalla quieta por vez. Revisá y aceptá los datos. Para EDITS, repetí por cada página del mismo vuelo; las filas identificadas se acumulan sin sumar dos veces. Doble clic para editar."
-                : "OCR local: lectura continua mientras hacés scroll. Doble clic en un vuelo para editar sus datos; botón Leer EDITS para escanear.";
+                ? "IA Gemini: capturá una pantalla quieta por vez. Revisá y aceptá los datos. Para EDITS, repetí por cada página del mismo vuelo; las filas identificadas se acumulan sin sumar dos veces. Doble clic en una celda para editar sin ventanas."
+                : "OCR local: lectura continua mientras hacés scroll. Doble clic en una celda para editar; Enter/Tab guarda, Esc cancela; botón Leer EDITS para escanear.";
         };
         var configure = new Button { Text = "Configurar IA", AutoSize = true };
         configure.Click += (_, _) => { using var dialog = new VisionSettingsForm(); ShowForegroundDialog(dialog); };
-        var edit = new Button { Text = "Editar vuelo / EDITS", AutoSize = true };
+        var edit = new Button { Text = "Editar celda (F2)", AutoSize = true };
         edit.Click += (_, _) => EditSelectedFlight();
         var reread = new Button { Text = "Permitir releer", AutoSize = true };
         reread.Click += (_, _) =>
@@ -73,14 +73,12 @@ public sealed partial class BubbleMainForm
     {
         if (_visionBusy) return;
         var selected = GetSelectedFlight();
-        if (selected is null) { MessageBox.Show(this, "Seleccioná un vuelo primero.", "Editar vuelo"); return; }
-        var oldFlight = selected.Vuelo;
-        using var editor = new FlightEditorForm(selected);
-        if (ShowForegroundDialog(editor) != DialogResult.OK) return;
-        if (oldFlight != selected.Vuelo && selected.SourceFlight.Length == 0) selected.SourceFlight = oldFlight;
-        _arrivals.ResetBindings(); _departures.ResetBindings();
-        _export.Enabled = AllFlights().Any();
-        _status.Text = $"{selected.Vuelo}: cambios manuales guardados y protegidos. Se incluyen en Excel.";
+        if (selected is null) { _status.Text = "Seleccioná una celda para editar."; return; }
+        var grid = _arrivals.Contains(selected) ? _arrivalGrid : _departureGrid;
+        if (grid.CurrentCell is null || grid.CurrentCell.ReadOnly)
+            grid.CurrentCell = grid.CurrentRow!.Cells[nameof(FlightData.Edits)];
+        grid.Focus();
+        grid.BeginEdit(true);
     }
 
     private static void MergeRecognizedFlight(BindingList<FlightData> target, FlightData incoming)
@@ -95,6 +93,7 @@ public sealed partial class BubbleMainForm
 
     private async Task CaptureWithVisionAsync(string kind, string movement)
     {
+        if (!FinishTableEditing()) return;
         if (_visionBusy) return;
         var selected = kind == "ito" ? _departureGrid.CurrentRow?.DataBoundItem as FlightData : GetSelectedFlight();
         if (kind is "ito" or "specials" && selected is null)
@@ -201,7 +200,7 @@ public sealed partial class BubbleMainForm
             _ => string.Join("\r\n", result.Specials.Select(r => $"{r.Identity}: {string.Join(", ", r.Codes)}"))
         };
         if (result.Warnings.Count > 0) text += "\r\n\r\nREVISAR:\r\n" + string.Join("\r\n", result.Warnings);
-        return text + "\r\n\r\nDespués de cargar, usá doble clic o Editar vuelo / EDITS para corregir.";
+        return text + "\r\n\r\nDespués de cargar, editá directamente en la tabla con doble clic o F2. Enter/Tab guarda; Esc cancela.";
     }
 }
 

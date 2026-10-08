@@ -1,4 +1,4 @@
-# AEP Control v2.25.2
+# AEP Control v2.26.0
 
 Prototipo portátil para Windows que lee por OCR la tabla de vuelos del siguiente turno.
 
@@ -13,7 +13,7 @@ El OCR se procesa localmente con el motor de Windows. No se conecta a Sabre ni e
 
 ## Descargar el EXE
 
-Entrar en **Actions**, abrir la ejecución más reciente y descargar el artefacto **AEP-Control-v2.25.2-win-x64**.
+Entrar en **Actions**, abrir la ejecución más reciente y descargar el artefacto **AEP-Control-v2.26.0-win-x64**.
 
 ## Requisitos
 
@@ -66,7 +66,7 @@ Esta versión es una prueba inicial. El resultado debe revisarse antes de utiliz
 - **Configurar IA**: ingresar clave propia de Google AI Studio y modelo con visión. La clave se cifra con DPAPI del usuario Windows y no se incluye en código ni en el EXE.
 - Usar un proyecto de Google **sin facturación habilitada**. La aplicación no puede verificar ese estado ni garantizar que el proveedor mantenga una cuota gratuita. No habilita facturación, cambia modelos o reintenta consultas automáticamente. HTTP 429 detiene la consulta. Límite local configurable, 100 solicitudes diarias por defecto (también cuentan intentos fallidos).
 - Google puede utilizar contenido del nivel gratuito para mejorar productos. No enviar datos personales, sensibles o confidenciales. Probar con capturas ficticias o anonimizadas; verificar la política de la empresa antes de usar imágenes operativas. No se envía nada al ejecutar pruebas automáticas.
-- **Doble clic** en un vuelo o **Editar vuelo / EDITS** abre el editor. Se pueden corregir vuelo, aeropuerto, hora, equipo, PE/ECO, matrícula, configuración, servicios y cantidades EDITS. Un código por línea: `WCHR 2`. Borrar una línea quita ese código; códigos adicionales se permiten con 3–6 caracteres.
+- **Doble clic o F2** en una celda permite corregirla directamente en la tabla, sin otra ventana. **Enter**, **Tab** o cambiar de celda guarda; **Esc** cancela. Se pueden corregir vuelo, aeropuerto, hora, equipo, PE/ECO, datos ITO de salidas y EDITS. Separar códigos con punto y coma: `WCHR 2; INF 1; ETO 3`. Borrar un código lo quita; borrar todo elimina las cantidades. Para confirmar cero en EDITS aún no leídos, escribir `WCHR 0`. Los errores se indican en la celda y en el estado, sin ventanas emergentes.
 - Campos modificados se marcan **Manual**, se conservan frente a nuevas capturas locales o IA y se exportan al Excel, incluyendo INF/ETO en columnas propias. **Permitir releer** desprotege los campos y reinicia la acumulación IA de EDITS, sin borrar los valores actuales hasta una lectura nueva.
 - La regla WCHC > WCHS > WCHR solo se aplica al mismo pasajero en capturas IA. Pasajeros distintos se cuentan por separado.
 - Los datos del turno y sus protecciones permanecen en memoria durante la sesión; Reiniciar o cerrar limpia el turno. Exportar Excel antes de cerrar.
@@ -83,3 +83,7 @@ Configuración IA, editor y revisión de capturas se abren delante de la ventana
 ## v2.25.2
 
 Refuerza las instrucciones de lectura de la hora por fila y movimiento. Normaliza horas H:mm, HHmm, HH:mm:ss, AM/PM y fechas seguidas de hora a HH:mm. Cada hora ilegible, ausente o inválida genera una advertencia por vuelo antes de cargar. No inventa horarios ni convierte zonas horarias.
+
+## v2.26.0
+
+Edición directa en las tablas de llegadas y salidas. Los cambios confirmados actualizan el mismo vuelo y el Excel; no se abre el editor aparte. Las correcciones conservan su protección ante OCR/IA. Revisión es una columna informativa. Las columnas tienen un ancho mínimo legible y desplazamiento horizontal.

@@ -25,7 +25,7 @@ public sealed partial class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v2.25.2 — OCR / IA y edición";
+        Text = "AEP Control v2.26.0 — edición directa en tabla";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1280, 720);
         TopMost = true;
@@ -98,8 +98,12 @@ public sealed partial class BubbleMainForm : Form
         _departureGrid.Enter += (_, _) => _arrivalGrid.ClearSelection();
         _arrivalGrid.SelectionChanged += (_, _) => UpdateSelectedFlightStatus();
         _departureGrid.SelectionChanged += (_, _) => UpdateSelectedFlightStatus();
-        _arrivalGrid.CellDoubleClick += (_, e) => { if (e.RowIndex >= 0) EditSelectedFlight(); };
-        _departureGrid.CellDoubleClick += (_, e) => { if (e.RowIndex >= 0) EditSelectedFlight(); };
+        foreach (var grid in new[] { _arrivalGrid, _departureGrid })
+            FlightGridEditing.Attach(grid, flight =>
+            {
+                _export.Enabled = AllFlights().Any();
+                _status.Text = $"{flight.Vuelo}: cambio guardado y protegido. Enter/Tab confirma; Esc cancela.";
+            }, message => _status.Text = message);
         ConfigureVisionAndEditing(bar);
 
         var arrivalBox = new GroupBox { Text = "LLEGADAS", Dock = DockStyle.Fill, Padding = new Padding(8), BackColor = Color.FromArgb(239, 247, 251), ForeColor = Color.FromArgb(18, 57, 91), Font = new Font("Segoe UI", 9, FontStyle.Bold) };
@@ -153,6 +157,7 @@ public sealed partial class BubbleMainForm : Form
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Vuelo", DataPropertyName = nameof(FlightData.Vuelo) });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = airportTitle, DataPropertyName = nameof(FlightData.Destino) });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = timeTitle, DataPropertyName = nameof(FlightData.Hora) });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Equipo", DataPropertyName = nameof(FlightData.Equipo) });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Booking", DataPropertyName = nameof(FlightData.Booking) });
         if (includeDepartureOperation)
         {
@@ -163,6 +168,8 @@ public sealed partial class BubbleMainForm : Form
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "EDITS", DataPropertyName = nameof(FlightData.Edits) });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Revisión", DataPropertyName = nameof(FlightData.Revision), FillWeight = 55 });
     }
+
+    private bool FinishTableEditing() => _arrivalGrid.EndEdit() && _departureGrid.EndEdit();
 
     private IEnumerable<FlightData> AllFlights() => _arrivals.Concat(_departures);
 
@@ -210,6 +217,8 @@ public sealed partial class BubbleMainForm : Form
 
     private void ResetFlow()
     {
+        _arrivalGrid.CancelEdit();
+        _departureGrid.CancelEdit();
         _visionCts?.Cancel();
         _visionSpecials.Clear();
         _cts?.Cancel();
@@ -225,6 +234,7 @@ public sealed partial class BubbleMainForm : Form
         _export.Enabled = false;
         _title.Text = "Paso 1 — Vuelos de llegada";
         _help.Text = "Marcá SOLO la grilla de Sabre: desde los encabezados No/Aerolínea/Vuelo hasta la última fila visible. La app leerá Vuelo, Origen o Destino, Hora y Booking por columnas mientras hacés scroll.";
+        _help.Text += " Doble clic en una celda para corregir; Enter/Tab guarda y Esc cancela.";
         _status.Text = "Esperando lectura.";
         Show();
     }
@@ -236,6 +246,7 @@ public sealed partial class BubbleMainForm : Form
 
     private async Task ScanFlightsAsync(string movement)
     {
+        if (!FinishTableEditing()) return;
         if (UseVision) { await CaptureWithVisionAsync("flights", movement); return; }
         Hide();
         await Task.Delay(250);
@@ -364,6 +375,7 @@ public sealed partial class BubbleMainForm : Form
 
     private async Task ReadDepartureOperationAsync()
     {
+        if (!FinishTableEditing()) return;
         if (UseVision) { await CaptureWithVisionAsync("ito", "Salida"); return; }
         if (_departures.Count == 0)
         {
@@ -460,9 +472,9 @@ public sealed partial class BubbleMainForm : Form
 
     private FlightData? GetSelectedFlight()
     {
-        if (_arrivalGrid.Focused && _arrivalGrid.CurrentRow?.DataBoundItem is FlightData arrival)
+        if (_arrivalGrid.ContainsFocus && _arrivalGrid.CurrentRow?.DataBoundItem is FlightData arrival)
             return arrival;
-        if (_departureGrid.Focused && _departureGrid.CurrentRow?.DataBoundItem is FlightData departure)
+        if (_departureGrid.ContainsFocus && _departureGrid.CurrentRow?.DataBoundItem is FlightData departure)
             return departure;
         if (_arrivalGrid.SelectedRows.Count > 0)
             return _arrivalGrid.SelectedRows[0].DataBoundItem as FlightData;
@@ -480,6 +492,7 @@ public sealed partial class BubbleMainForm : Form
 
     private async Task StartBubbleAsync()
     {
+        if (!FinishTableEditing()) return;
         if (UseVision) { await CaptureWithVisionAsync("specials", ""); return; }
         var f = GetSelectedFlight();
         if (f is null)
@@ -561,6 +574,7 @@ public sealed partial class BubbleMainForm : Form
 
     private void ExportExcel()
     {
+        if (!FinishTableEditing()) return;
         if (!AllFlights().Any())
         {
             MessageBox.Show("Todavía no hay vuelos para exportar.", "AEP Control", MessageBoxButtons.OK, MessageBoxIcon.Information);
