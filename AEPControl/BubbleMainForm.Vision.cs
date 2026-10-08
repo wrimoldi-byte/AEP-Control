@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 
 namespace AEPControl;
 
@@ -18,9 +19,9 @@ public sealed partial class BubbleMainForm
         _readerMode.SelectedIndex = 0;
         _readerMode.SelectedIndexChanged += (_, _) =>
         {
-            _status.Text = UseVision ? "IA: EDITS admite scroll. Marcá la zona, desplazate con pausas y terminá para procesar." : "OCR local: lectura continua disponible.";
+            _status.Text = UseVision ? "IA: EDITS automático. Marcá la zona y el programa captura, hace scroll y procesa al terminar." : "OCR local: lectura continua disponible.";
             _help.Text = UseVision
-                ? "IA Gemini: en EDITS marcá la zona una vez, hacé scroll pausando 1 segundo y tocá Terminar y revisar. Se guardan hasta 12 pantallas por lote y se procesan juntas. Doble clic en una celda para corregir."
+                ? "IA Gemini: en EDITS marcá la zona una vez. El programa hará el scroll y las capturas automáticamente, y enviará el lote completo al terminar. Se guardan hasta 12 pantallas por lote. Doble clic en una celda para corregir."
                 : "OCR local: lectura continua mientras hacés scroll. Doble clic en una celda para editar; Enter/Tab guarda, Esc cancela; botón Leer EDITS para escanear.";
         };
         var configure = new Button { Text = "Configurar IA", AutoSize = true };
@@ -126,7 +127,7 @@ public sealed partial class BubbleMainForm
             if (selector.ShowDialog() != DialogResult.OK) return;
             using (var bitmap = CaptureArea(selector.SelectedArea)) pages.Observe(bitmap, captureNow: true);
             if (pages.Pages.Count == 0) throw new InvalidOperationException("El recorte es demasiado grande. Seleccioná solo la lista.");
-            if (kind == "specials" && !await CaptureEditsScrollAsync(selector.SelectedArea, pages, selected!.Vuelo, token))
+            if (kind == "specials" && !await CaptureEditsAutoScrollAsync(selector.SelectedArea, pages, selected!.Vuelo, token))
             { _status.Text = "Captura cancelada. No se enviaron imágenes ni se modificaron datos."; return; }
             Show(); Activate();
             using (var preview = new VisionCaptureDialog(pages.Pages, limitReached: pages.LimitReached))
@@ -205,27 +206,118 @@ public sealed partial class BubbleMainForm
         catch { bitmap.Dispose(); throw; }
     }
 
-    private static async Task<bool> CaptureEditsScrollAsync(Rectangle area, VisionPageBuffer pages, string flight, CancellationToken token)
+    private static async Task<bool> CaptureEditsAutoScrollAsync(Rectangle area, VisionPageBuffer pages, string flight, CancellationToken token)
     {
-        using var bubble = new VisionScrollCaptureForm(flight, area);
-        bubble.UpdateState(pages.Pages.Count, pages.LimitReached, bubble.Bounds.IntersectsWith(area));
-        bubble.Show(); // Non-modal: Sabre remains available for mouse and keyboard scrolling.
-        while (!bubble.Cancelled)
+        // Sólo se usa en modo IA para EDITS. El formulario principal ya está oculto,
+        // de modo que Sabre queda visible debajo de la zona seleccionada.
+        var originalCursor = Cursor.Position;
+        using var previous = CaptureArea(area);
+        var previousFrame = (Bitmap)previous.Clone();
+        var unchangedAfterScroll = 0;
+
+        try
         {
-            token.ThrowIfCancellationRequested();
-            var overlaps = bubble.Bounds.IntersectsWith(area);
-            if (!overlaps && !pages.LimitReached)
+            _visionScrollStatus = $"IA EDITS · {flight}: captura automática iniciada…";
+            for (var step = 0; step < VisionPageBuffer.MaxPages + 2; step++)
             {
+                token.ThrowIfCancellationRequested();
+                if ((GetAsyncKeyState((int)Keys.Escape) & 0x8000) != 0) return false;
+
+                if (pages.Pages.Count >= VisionPageBuffer.MaxPages)
+                {
+                    // Fuerza la marca de lote lleno sin guardar otra imagen.
+                    using var extra = CaptureArea(area);
+                    pages.Observe(extra, captureNow: true);
+                    return true;
+                }
+
+                ScrollWindowAt(area, -600);
+                await Task.Delay(850, token);
+
                 using var frame = CaptureArea(area);
-                pages.Observe(frame, captureNow: bubble.CaptureRequested || bubble.Finished);
-                bubble.CaptureRequested = false;
+                if (FramesAreSimilar(previousFrame, frame))
+                {
+                    unchangedAfterScroll++;
+                    if (unchangedAfterScroll >= 2) return true;
+                    continue;
+                }
+
+                unchangedAfterScroll = 0;
+                pages.Observe(frame, captureNow: true);
+
+                previousFrame.Dispose();
+                previousFrame = (Bitmap)frame.Clone();
+                _visionScrollStatus = $"IA EDITS · {flight}: {pages.Pages.Count} pantallas capturadas…";
             }
-            bubble.UpdateState(pages.Pages.Count, pages.LimitReached, overlaps);
-            if (bubble.Finished) return true;
-            await Task.Delay(350, token);
+
+            return true;
         }
-        return false;
+        finally
+        {
+            previousFrame.Dispose();
+            Cursor.Position = originalCursor;
+        }
     }
+
+    private static string _visionScrollStatus = "";
+
+    private static void ScrollWindowAt(Rectangle area, int delta)
+    {
+        var point = new POINT(area.Left + area.Width / 2, area.Top + area.Height / 2);
+        Cursor.Position = new Point(point.X, point.Y);
+
+        var child = WindowFromPoint(point);
+        var target = child == IntPtr.Zero ? IntPtr.Zero : GetAncestor(child, 2); // GA_ROOT
+        if (target != IntPtr.Zero) SetForegroundWindow(target);
+
+        // El wheel se envía en la misma posición de la lista para que Sabre desplace
+        // exactamente el control que el usuario seleccionó.
+        mouse_event(0x0800, 0, 0, delta, UIntPtr.Zero); // MOUSEEVENTF_WHEEL
+    }
+
+    private static bool FramesAreSimilar(Bitmap a, Bitmap b)
+    {
+        if (a.Width != b.Width || a.Height != b.Height) return false;
+
+        long difference = 0;
+        long samples = 0;
+        var stepX = Math.Max(8, a.Width / 80);
+        var stepY = Math.Max(8, a.Height / 60);
+
+        for (var y = stepY / 2; y < a.Height; y += stepY)
+        for (var x = stepX / 2; x < a.Width; x += stepX)
+        {
+            var ca = a.GetPixel(x, y);
+            var cb = b.GetPixel(x, y);
+            difference += Math.Abs(ca.R - cb.R) + Math.Abs(ca.G - cb.G) + Math.Abs(ca.B - cb.B);
+            samples += 3;
+        }
+
+        return samples > 0 && (double)difference / samples < 3.0;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly struct POINT
+    {
+        public readonly int X;
+        public readonly int Y;
+        public POINT(int x, int y) { X = x; Y = y; }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr WindowFromPoint(POINT point);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
+
+    [DllImport("user32.dll")]
+    private static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extraInfo);
 
     private static string Summary(VisionResult result, string kind, string context)
     {
