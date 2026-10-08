@@ -5,18 +5,22 @@ using System.Text.Json;
 
 namespace AEPControl;
 
+public sealed record GeminiProgressInfo(string Stage, string Detail, int Step, int TotalSteps, int Attempt, int MaxAttempts);
+
 public sealed class GeminiVisionClient
 {
     private static readonly HttpClient Client = new() { Timeout = TimeSpan.FromSeconds(90) };
     private readonly HttpClient _client;
     public GeminiVisionClient(HttpClient? client = null) => _client = client ?? Client;
     public Task<VisionResult> ReadAsync(Bitmap bitmap, string kind, string movement, string selectedFlight,
-        VisionSettings settings, CancellationToken cancellationToken) =>
-        ReadAsync(new[] { bitmap }, kind, movement, selectedFlight, settings, cancellationToken);
+        VisionSettings settings, CancellationToken cancellationToken, IProgress<GeminiProgressInfo>? progress = null) =>
+        ReadAsync(new[] { bitmap }, kind, movement, selectedFlight, settings, cancellationToken, progress);
 
     public async Task<VisionResult> ReadAsync(IReadOnlyList<Bitmap> bitmaps, string kind, string movement, string selectedFlight,
-        VisionSettings settings, CancellationToken cancellationToken)
+        VisionSettings settings, CancellationToken cancellationToken, IProgress<GeminiProgressInfo>? progress = null)
     {
+        const int maxAttempts = 2;
+        progress?.Report(new GeminiProgressInfo("Preparando capturas", $"Preparando {bitmaps.Count} pantalla{(bitmaps.Count == 1 ? "" : "s")}…", 1, 6, 1, maxAttempts));
         if (bitmaps.Count is < 1 or > VisionPageBuffer.MaxPages)
             throw new InvalidOperationException("Capturá entre 1 y 12 pantallas por lote.");
         var images = new List<object>();
@@ -30,6 +34,7 @@ public sealed class GeminiVisionClient
             if (totalBytes > VisionPageBuffer.MaxBytes) throw new InvalidOperationException("El lote es demasiado grande. Capturá menos pantallas o una zona menor.");
             images.Add(new { inlineData = new { mimeType = "image/png", data = Convert.ToBase64String(stream.ToArray()) } });
         }
+        progress?.Report(new GeminiProgressInfo("Preparando solicitud", $"Imágenes listas · {Math.Round(totalBytes / 1024d / 1024d, 1)} MB", 2, 6, 1, maxAttempts));
         var prompt = $"""
             Extraé datos visibles de {bitmaps.Count} capturas operativas de Sabre, en orden de captura. Tarea: {kind}. Movimiento: {movement}.
             Vuelo seleccionado como contexto: {selectedFlight}; nunca lo uses para inventar un número no visible.
@@ -64,23 +69,77 @@ public sealed class GeminiVisionClient
             contents = new[] { new { role = "user", parts = new object[] { new { text = prompt } }.Concat(images).ToArray() } },
             generationConfig = new { temperature = 0, maxOutputTokens = 8192, responseMimeType = "application/json", responseSchema = Schema() }
         };
-        using var request = new HttpRequestMessage(HttpMethod.Post,
-            $"https://generativelanguage.googleapis.com/v1beta/models/{settings.Model}:generateContent");
-        request.Headers.Add("x-goog-api-key", settings.GetApiKey());
-        request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-        using var response = await _client.SendAsync(request, cancellationToken);
-        // Never include the provider response or key in error dialogs/logs.
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException(response.StatusCode switch
+        var payloadJson = JsonSerializer.Serialize(payload);
+        Exception? lastError = null;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            progress?.Report(new GeminiProgressInfo("Enviando a Gemini", $"Modelo {settings.Model} · enviando solicitud…", 3, 6, attempt, maxAttempts));
+            try
             {
-                HttpStatusCode.TooManyRequests => "Cuota o límite de Gemini agotado. No se reintentó ni se cambió de plan. Usá OCR local o edición manual.",
-                HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => "Gemini rechazó la clave o el acceso. Revisá la configuración y los permisos del proyecto.",
-                HttpStatusCode.NotFound => "Modelo no disponible para esta cuenta. Revisá el modelo en Configurar IA.",
-                HttpStatusCode.BadRequest => "Gemini rechazó la solicitud. Revisá el modelo configurado y probá con una captura menor.",
-                _ => $"Gemini no respondió correctamente (HTTP {(int)response.StatusCode}). Los datos anteriores se conservan."
-            });
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        return ParseResponse(json);
+                using var request = new HttpRequestMessage(HttpMethod.Post,
+                    $"https://generativelanguage.googleapis.com/v1beta/models/{settings.Model}:generateContent");
+                request.Headers.Add("x-goog-api-key", settings.GetApiKey());
+                request.Content = new StringContent(payloadJson, Encoding.UTF8, "application/json");
+
+                progress?.Report(new GeminiProgressInfo("Esperando respuesta", "Gemini está analizando las capturas…", 0, 6, attempt, maxAttempts));
+                using var response = await _client.SendAsync(request, cancellationToken);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var transient = response.StatusCode == HttpStatusCode.TooManyRequests ||
+                        (int)response.StatusCode >= 500;
+                    var message = response.StatusCode switch
+                    {
+                        HttpStatusCode.TooManyRequests => "Gemini alcanzó temporalmente un límite de solicitudes (HTTP 429).",
+                        HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => "Gemini rechazó la clave o el acceso. Revisá la configuración y los permisos del proyecto.",
+                        HttpStatusCode.NotFound => "Modelo no disponible para esta cuenta. Revisá el modelo en Configurar IA.",
+                        HttpStatusCode.BadRequest => "Gemini rechazó la solicitud. Revisá el modelo configurado y probá con una captura menor.",
+                        _ => $"Gemini no respondió correctamente (HTTP {(int)response.StatusCode})."
+                    };
+
+                    if (transient && attempt < maxAttempts)
+                    {
+                        progress?.Report(new GeminiProgressInfo("Respuesta temporal", $"{message} Reintentando automáticamente…", 0, 6, attempt + 1, maxAttempts));
+                        await Task.Delay(1200, cancellationToken);
+                        continue;
+                    }
+                    throw new InvalidOperationException($"{message} Etapa: respuesta HTTP. Intento {attempt}/{maxAttempts}.");
+                }
+
+                progress?.Report(new GeminiProgressInfo("Procesando respuesta", "Gemini respondió. Validando y leyendo los datos…", 5, 6, attempt, maxAttempts));
+                var json = await response.Content.ReadAsStringAsync(cancellationToken);
+                var parsed = ParseResponse(json);
+                progress?.Report(new GeminiProgressInfo("Respuesta válida", "Datos recibidos correctamente.", 6, 6, attempt, maxAttempts));
+                return parsed;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && attempt < maxAttempts)
+            {
+                lastError = new TimeoutException("Gemini superó el tiempo de espera.");
+                progress?.Report(new GeminiProgressInfo("Tiempo de espera agotado", "Gemini tardó demasiado. Reintentando automáticamente…", 0, 6, attempt + 1, maxAttempts));
+                await Task.Delay(1000, cancellationToken);
+            }
+            catch (HttpRequestException ex) when (attempt < maxAttempts)
+            {
+                lastError = ex;
+                progress?.Report(new GeminiProgressInfo("Error de conexión", "Falló la conexión con Gemini. Reintentando automáticamente…", 0, 6, attempt + 1, maxAttempts));
+                await Task.Delay(1000, cancellationToken);
+            }
+            catch (FormatException ex) when (attempt < maxAttempts)
+            {
+                lastError = ex;
+                progress?.Report(new GeminiProgressInfo("Respuesta inválida", "Gemini respondió, pero el contenido llegó incompleto o inválido. Reintentando…", 0, 6, attempt + 1, maxAttempts));
+                await Task.Delay(800, cancellationToken);
+            }
+        }
+
+        throw new InvalidOperationException(lastError is TimeoutException
+            ? "Gemini agotó el tiempo de espera en ambos intentos. Etapa: esperando respuesta."
+            : lastError is HttpRequestException
+                ? "No se pudo conectar con Gemini después de 2 intentos. Etapa: conexión."
+                : lastError is FormatException
+                    ? "Gemini devolvió una respuesta inválida en ambos intentos. Etapa: procesamiento."
+                    : "Gemini no pudo completar la lectura después de 2 intentos.");
     }
 
     public static VisionResult ParseResponse(string json)
