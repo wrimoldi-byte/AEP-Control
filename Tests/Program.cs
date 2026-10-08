@@ -57,27 +57,72 @@ internal static class Program
         Throws(() => GeminiVisionClient.ParseResponse(response.Replace("STOP", "MAX_TOKENS")), "Truncated Gemini response rejected");
         Throws(() => GeminiVisionClient.ParseResponse("{\"candidates\":[]}"), "Blocked/empty Gemini response rejected");
 
-        // Exercise real Windows editor save and DPAPI, without real passenger data or API requests.
+        // Exercise the actual main tables and editing controls on Windows.
         var editorFlight = new FlightData { Vuelo = "LA8035", Movimiento = "Salida", Destino = "GRU", Hora = "12:00" };
-        using (var editor = new FlightEditorForm(editorFlight))
+        using (var form = new BubbleMainForm())
         {
-            var fields = (Dictionary<string, TextBox>)typeof(FlightEditorForm).GetField("_fields", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(editor)!;
-            fields[nameof(FlightData.Configuracion)].Text = "12/156";
-            fields[nameof(FlightData.Booking)].Text = "7/156";
-            var edits = (TextBox)typeof(FlightEditorForm).GetField("_edits", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(editor)!;
-            edits.Text = "WCHS 2\nINF 1\nETO 3";
-            typeof(FlightEditorForm).GetMethod("Save", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(editor, null);
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            var departures = (System.ComponentModel.BindingList<FlightData>)typeof(BubbleMainForm).GetField("_departures", flags)!.GetValue(form)!;
+            var arrivals = (System.ComponentModel.BindingList<FlightData>)typeof(BubbleMainForm).GetField("_arrivals", flags)!.GetValue(form)!;
+            var grid = (DataGridView)typeof(BubbleMainForm).GetField("_departureGrid", flags)!.GetValue(form)!;
+            var arrivalGrid = (DataGridView)typeof(BubbleMainForm).GetField("_arrivalGrid", flags)!.GetValue(form)!;
+            departures.Add(editorFlight);
+            departures.Add(new FlightData { Vuelo = "LA8033", Movimiento = "Salida" });
+            arrivals.Add(new FlightData { Vuelo = "LA8032", Movimiento = "Llegada", Destino = "GRU" });
+            form.Show();
+            Application.DoEvents();
+            void BeginCell(DataGridView target, string property, string value, int row = 0)
+            {
+                target.Focus();
+                target.CurrentCell = target.Rows[row].Cells[property];
+                Check(target.BeginEdit(true), "Begin inline " + property);
+                ((TextBox)target.EditingControl!).Text = value;
+                target.NotifyCurrentCellDirty(true);
+            }
+            void Edit(string property, string value)
+            {
+                BeginCell(grid, property, value);
+                Check(grid.EndEdit(), "Commit inline " + property);
+            }
+            Check(grid.Rows[0].Cells[nameof(FlightData.Vuelo)].FormattedValue?.ToString() == "LA8035", "Unbound table displays live flight model");
+            Edit(nameof(FlightData.Configuracion), "12/156");
+            Check(!editorFlight.EspecialesLeidos && !editorFlight.ManualFields.Contains(nameof(FlightData.Edits)), "Editing ITO does not mark unread EDITS as zero");
+            Edit(nameof(FlightData.Booking), "7 / 156");
+            Edit(nameof(FlightData.Edits), "WCHS 2; INF 1; ETO 3");
+            Check(editorFlight.Configuracion == "12/156" && editorFlight.Booking == "7/156" && editorFlight.WCHS == 2 && editorFlight.INF == 1,
+                "Real inline table saves ITO, booking, EDITS and manual protections");
+            Check(grid.Rows[0].Cells[nameof(FlightData.Edits)].FormattedValue?.ToString() == editorFlight.Edits, "Computed EDITS display reflects committed model");
+            BeginCell(grid, nameof(FlightData.Booking), "900/900");
+            typeof(DataGridView).GetMethod("ProcessDialogKey", flags)!.Invoke(grid, new object[] { Keys.Escape });
+            Check(editorFlight.Booking == "7/156", "Cancel edit preserves previous booking");
+            BeginCell(grid, nameof(FlightData.Hora), "25:70");
+            Check(!FlightGridEditing.FinishEdit(grid) && editorFlight.Hora == "12:00", "Invalid time stays in cell without changing model");
+            typeof(DataGridView).GetMethod("ProcessDialogKey", flags)!.Invoke(grid, new object[] { Keys.Escape });
+            Check(grid.CurrentCell.ErrorText.Length == 0, "Cancel clears validation error");
+            BeginCell(grid, nameof(FlightData.Edits), "WCHR 2; WCHR 3");
+            Check(!FlightGridEditing.FinishEdit(grid) && editorFlight.WCHS == 2, "Duplicate EDIT rejected atomically in table");
+            typeof(DataGridView).GetMethod("ProcessDialogKey", flags)!.Invoke(grid, new object[] { Keys.Escape });
+            BeginCell(grid, nameof(FlightData.Hora), "0705");
+            typeof(DataGridView).GetMethod("ProcessDialogKey", flags)!.Invoke(grid, new object[] { Keys.Tab });
+            Check(editorFlight.Hora == "07:05" && grid.CurrentCell.ColumnIndex != grid.Columns[nameof(FlightData.Hora)].Index, "Tab normalizes time, saves and advances cell");
+            BeginCell(grid, nameof(FlightData.Matricula), "CC-TEST");
+            typeof(DataGridView).GetMethod("ProcessDialogKey", flags)!.Invoke(grid, new object[] { Keys.Enter });
+            Check(editorFlight.Matricula == "CC-TEST", "Enter commits ITO field");
+            Edit(nameof(FlightData.Vuelo), "la 8141");
+            Check(editorFlight.Vuelo == "LA8141" && editorFlight.SourceFlight == "LA8035", "Renaming preserves source flight identity");
+            FlightCorrections.Merge(editorFlight, new FlightData { Hora = "22:00", Configuracion = "12/136", Premium = 1, Economy = 99, BookingKnown = true });
+            FlightCorrections.SetCounts(editorFlight, new Dictionary<string, int> { ["WCHS"] = 99 });
+            Check(editorFlight.Booking == "7/156" && editorFlight.Hora == "07:05" && editorFlight.WCHS == 2, "Inline corrections protected against subsequent reads");
+            BeginCell(grid, nameof(FlightData.Edits), "WCHR 0", 1);
+            Check(grid.EndEdit() && departures[1].EspecialesLeidos && departures[1].ManualFields.Contains(nameof(FlightData.Edits)), "Explicit zero confirms unread EDITS in table");
+            BeginCell(arrivalGrid, nameof(FlightData.Edits), "WCHR 4; INF 2");
+            Check(arrivalGrid.EndEdit() && arrivals[0].WCHR == 4 && arrivals[0].INF == 2, "Arrival EDITS edited in place");
+            BeginCell(arrivalGrid, nameof(FlightData.Edits), "");
+            Check(arrivalGrid.EndEdit() && arrivals[0].WCHR == 0 && arrivals[0].INF == 0, "Clearing EDITS removes previous counts");
+            Check(grid.Columns[nameof(FlightData.Revision)].ReadOnly, "Review marker remains read-only");
+            Check(Application.OpenForms.Count == 1, "Inline editing never opens another form");
+            form.Close();
         }
-        Check(editorFlight.Configuracion == "12/156" && editorFlight.Booking == "7/156" && editorFlight.WCHS == 2 && editorFlight.INF == 1,
-            "Real editor saves ITO, booking, EDITS and manual protections");
-        var onlyIto = new FlightData { Vuelo = "LA8033" };
-        using (var editor = new FlightEditorForm(onlyIto))
-        {
-            var fields = (Dictionary<string, TextBox>)typeof(FlightEditorForm).GetField("_fields", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(editor)!;
-            fields[nameof(FlightData.Configuracion)].Text = "12/156";
-            typeof(FlightEditorForm).GetMethod("Save", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(editor, null);
-        }
-        Check(!onlyIto.EspecialesLeidos && !onlyIto.ManualFields.Contains(nameof(FlightData.Edits)), "Editing ITO does not claim unread EDITS are zero");
         var settings = new VisionSettings();
         settings.SetApiKey("fake-test-key");
         Check(settings.GetApiKey() == "fake-test-key" && !settings.ProtectedKey.Contains("fake-test-key"), "API key encrypted with Windows user protection");

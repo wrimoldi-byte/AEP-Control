@@ -5,6 +5,73 @@ namespace AEPControl;
 
 public static class FlightCorrections
 {
+    public static string NormalizeManualValue(string property, string text)
+    {
+        var value = text.Trim();
+        switch (property)
+        {
+            case nameof(FlightData.Vuelo):
+                value = Regex.Replace(value.ToUpperInvariant(), @"\s+", "");
+                if (!Regex.IsMatch(value, @"^(?:[A-Z]{2})?\d{1,4}$"))
+                    throw new FormatException("Ingresá un vuelo válido, por ejemplo LA8035.");
+                break;
+            case nameof(FlightData.Destino):
+                value = value.ToUpperInvariant();
+                if (value.Length > 0 && !Regex.IsMatch(value, @"^[A-Z]{3}$"))
+                    throw new FormatException("Usá un aeropuerto de 3 letras.");
+                break;
+            case nameof(FlightData.Hora):
+                if (value.Length > 0)
+                {
+                    value = VisionResult.NormalizeTime(value);
+                    if (value.Length == 0) throw new FormatException("Ingresá una hora válida, por ejemplo 07:05 o 0705.");
+                }
+                break;
+            case nameof(FlightData.Booking):
+                if (value.Length > 0)
+                {
+                    if (!Regex.IsMatch(value, @"^\d{1,3}\s*/\s*\d{1,3}$"))
+                        throw new FormatException("Booking debe ser PE/ECO, por ejemplo 7/156.");
+                    value = string.Join("/", value.Split('/').Select(n => int.Parse(n)));
+                }
+                break;
+            case nameof(FlightData.Edits):
+                var counts = ParseCounts(value);
+                value = string.Join(" · ", counts.Where(p => p.Value > 0).Select(p => $"{p.Key} {p.Value}"));
+                break;
+            case nameof(FlightData.Equipo):
+            case nameof(FlightData.Matricula):
+            case nameof(FlightData.Configuracion):
+            case nameof(FlightData.Servicios):
+                break;
+            default: throw new FormatException("Este campo no se puede editar.");
+        }
+        return value;
+    }
+
+    public static void SetManualValue(FlightData flight, string property, string text)
+    {
+        var value = NormalizeManualValue(property, text);
+        var current = (string)typeof(FlightData).GetProperty(property)!.GetValue(flight)!;
+        // An explicit zero such as WCHR 0 confirms an unread, empty EDITS cell.
+        if (current == value && !(property == nameof(FlightData.Edits) && text.Trim().Length > 0 && !flight.EspecialesLeidos)) return;
+        if (property == nameof(FlightData.Edits))
+            SetCounts(flight, ParseCounts(value), manual: true);
+        else if (property == nameof(FlightData.Booking))
+        {
+            var parts = value.Split('/');
+            flight.Premium = value.Length == 0 ? 0 : int.Parse(parts[0]);
+            flight.Economy = value.Length == 0 ? 0 : int.Parse(parts[1]);
+            flight.BookingKnown = value.Length > 0;
+        }
+        else
+        {
+            if (property == nameof(FlightData.Vuelo) && flight.SourceFlight.Length == 0) flight.SourceFlight = flight.Vuelo;
+            typeof(FlightData).GetProperty(property)!.SetValue(flight, value);
+        }
+        flight.ManualFields.Add(property);
+    }
+
     private static readonly Dictionary<string, PropertyInfo> CountProperties = typeof(SpecialCounts)
         .GetProperties().Where(p => p.PropertyType == typeof(int) && p.CanWrite)
         .ToDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
