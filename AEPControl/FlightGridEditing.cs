@@ -4,6 +4,25 @@ namespace AEPControl;
 // Virtual, unbound columns allow those values to be edited without adding OCR setters.
 public static class FlightGridEditing
 {
+    // EndEdit() alone does not raise CellValidating when invoked by toolbar actions.
+    public static bool FinishEdit(DataGridView grid)
+    {
+        if (grid.IsCurrentCellDirty && grid.EditingControl is TextBox editor)
+        {
+            try
+            {
+                FlightCorrections.NormalizeManualValue((string)grid.CurrentCell.OwningColumn.Tag!, editor.Text);
+            }
+            catch (FormatException ex)
+            {
+                grid.CurrentCell.ErrorText = ex.Message;
+                grid.Focus();
+                return false;
+            }
+        }
+        return grid.EndEdit();
+    }
+
     public static void Attach(DataGridView grid, Action<FlightData> saved, Action<string> status)
     {
         grid.ReadOnly = false;
@@ -45,9 +64,17 @@ public static class FlightGridEditing
         grid.CellValuePushed += (_, e) =>
         {
             if (grid.Rows[e.RowIndex].DataBoundItem is not FlightData flight) return;
-            FlightCorrections.SetManualValue(flight, (string)grid.Columns[e.ColumnIndex].Tag!, Convert.ToString(e.Value) ?? "");
-            grid.InvalidateRow(e.RowIndex);
-            saved(flight);
+            try
+            {
+                FlightCorrections.SetManualValue(flight, (string)grid.Columns[e.ColumnIndex].Tag!, Convert.ToString(e.Value) ?? "");
+                grid.InvalidateRow(e.RowIndex);
+                saved(flight);
+            }
+            catch (FormatException ex)
+            {
+                grid.Rows[e.RowIndex].Cells[e.ColumnIndex].ErrorText = ex.Message;
+                status(ex.Message + " No se modificó el valor anterior.");
+            }
         };
         grid.CellEndEdit += (_, e) =>
         {

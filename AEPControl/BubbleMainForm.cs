@@ -169,7 +169,12 @@ public sealed partial class BubbleMainForm : Form
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Revisión", DataPropertyName = nameof(FlightData.Revision), FillWeight = 55 });
     }
 
-    private bool FinishTableEditing() => _arrivalGrid.EndEdit() && _departureGrid.EndEdit();
+    private bool FinishTableEditing()
+    {
+        if (FlightGridEditing.FinishEdit(_arrivalGrid) && FlightGridEditing.FinishEdit(_departureGrid)) return true;
+        _status.Text = "Corregí el dato marcado en la tabla o presioná Esc para cancelar.";
+        return false;
+    }
 
     private IEnumerable<FlightData> AllFlights() => _arrivals.Concat(_departures);
 
