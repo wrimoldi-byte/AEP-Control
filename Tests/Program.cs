@@ -139,6 +139,33 @@ internal static class Program
             var result = new GeminiVisionClient(client).ReadAsync(bitmap, "ito", "Salida", "LA8035", settings, CancellationToken.None).GetAwaiter().GetResult();
             Check(result.Ito.Configuracion == "12/156" && handler.Requests == 1, "Image request returns structured data in one call");
         }
+        using (var pages = new VisionPageBuffer())
+        using (var first = new Bitmap(20, 20))
+        using (var second = new Bitmap(20, 20))
+        {
+            using (var graphics = Graphics.FromImage(second)) graphics.Clear(Color.White);
+            Check(!pages.Observe(first) && !pages.Observe(first) && pages.Observe(first), "Scroll waits for three stable frames");
+            Check(!pages.Observe(first, true) && pages.Pages.Count == 1, "Identical scroll capture is not queued twice");
+            Check(!pages.Observe(second) && !pages.Observe(first) && !pages.Observe(second), "Moving screen does not produce unstable captures");
+            Check(pages.Observe(second, true) && pages.Pages.Count == 2, "Explicit capture includes final page");
+            var batchHandler = new FakeHandler(response, expectedImages: 2);
+            using var client = new HttpClient(batchHandler);
+            var batch = new GeminiVisionClient(client).ReadAsync(pages.Pages, "specials", "", "LA8035", settings, CancellationToken.None).GetAwaiter().GetResult();
+            Check(batchHandler.Requests == 1 && batch.Specials.Count == 2, "Multiple scroll pages sent in one Gemini request");
+            for (var i = 0; i < 12; i++)
+            {
+                using var frame = new Bitmap(20, 20);
+                using (var graphics = Graphics.FromImage(frame)) graphics.Clear(Color.FromArgb(i + 1, 80, 120));
+                pages.Observe(frame, true);
+            }
+            Check(pages.Pages.Count == VisionPageBuffer.MaxPages && pages.LimitReached, "Page limit preserves collected pages and reports pending content");
+            using var bubble = new VisionScrollCaptureForm("LA8035", new Rectangle(0, 0, 100, 100));
+            bubble.Show();
+            Application.DoEvents();
+            Check(!bubble.Modal, "Scroll capture window is non-modal");
+            bubble.Close();
+            Check(bubble.Cancelled && !bubble.Finished, "Closing scroll capture cancels without submitting");
+        }
         using (var client = new HttpClient(new FakeHandler("{}", HttpStatusCode.TooManyRequests)))
         using (var bitmap = new Bitmap(40, 40))
             Throws(() => new GeminiVisionClient(client).ReadAsync(bitmap, "ito", "Salida", "LA8035", settings, CancellationToken.None).GetAwaiter().GetResult(), "Quota exhaustion has no automatic retry or fallback model");
@@ -165,7 +192,7 @@ internal static class Program
         "specials":[{"identity":"PAX01","codes":["WCHR"]},{"identity":"PAX03","codes":["INF"]}],"warnings":[]}
         """;
 
-    private sealed class FakeHandler(string response, HttpStatusCode status = HttpStatusCode.OK) : HttpMessageHandler
+    private sealed class FakeHandler(string response, HttpStatusCode status = HttpStatusCode.OK, int expectedImages = 1) : HttpMessageHandler
     {
         public int Requests { get; private set; }
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
@@ -174,6 +201,7 @@ internal static class Program
             Check(request.Headers.GetValues("x-goog-api-key").Single() == "fake-test-key" && !request.RequestUri!.Query.Contains("key"), "API key stays in header, not URL");
             using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
             var parts = body.RootElement.GetProperty("contents")[0].GetProperty("parts");
+            Check(parts.GetArrayLength() == expectedImages + 1, "Request contains every captured page");
             Check(parts[1].GetProperty("inlineData").GetProperty("mimeType").GetString() == "image/png" &&
                 body.RootElement.GetProperty("generationConfig").GetProperty("responseSchema").GetProperty("required").GetArrayLength() == 4,
                 "Capture sent directly as PNG with required JSON schema");

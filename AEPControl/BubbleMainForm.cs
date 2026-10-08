@@ -25,7 +25,7 @@ public sealed partial class BubbleMainForm : Form
 
     public BubbleMainForm()
     {
-        Text = "AEP Control v2.26.0 — edición directa en tabla";
+        Text = "AEP Control v2.27.0 — edición directa en tabla";
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1280, 720);
         TopMost = true;
