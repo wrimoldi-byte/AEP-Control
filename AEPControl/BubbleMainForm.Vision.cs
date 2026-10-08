@@ -18,9 +18,9 @@ public sealed partial class BubbleMainForm
         _readerMode.SelectedIndex = 0;
         _readerMode.SelectedIndexChanged += (_, _) =>
         {
-            _status.Text = UseVision ? "IA: una captura por clic. Volvé a capturar cada página al hacer scroll." : "OCR local: lectura continua disponible.";
+            _status.Text = UseVision ? "IA: EDITS admite scroll. Marcá la zona, desplazate con pausas y terminá para procesar." : "OCR local: lectura continua disponible.";
             _help.Text = UseVision
-                ? "IA Gemini: capturá una pantalla quieta por vez. Revisá y aceptá los datos. Para EDITS, repetí por cada página del mismo vuelo; las filas identificadas se acumulan sin sumar dos veces. Doble clic en una celda para editar sin ventanas."
+                ? "IA Gemini: en EDITS marcá la zona una vez, hacé scroll pausando 1 segundo y tocá Terminar y revisar. Se guardan hasta 12 pantallas por lote y se procesan juntas. Doble clic en una celda para corregir."
                 : "OCR local: lectura continua mientras hacés scroll. Doble clic en una celda para editar; Enter/Tab guarda, Esc cancela; botón Leer EDITS para escanear.";
         };
         var configure = new Button { Text = "Configurar IA", AutoSize = true };
@@ -117,29 +117,32 @@ public sealed partial class BubbleMainForm
         _visionBusy = true;
         _visionCts = new CancellationTokenSource();
         var token = _visionCts.Token;
+        using var pages = new VisionPageBuffer();
         try
         {
             Hide();
             await Task.Delay(250, token);
             using var selector = new SelectionForm();
             if (selector.ShowDialog() != DialogResult.OK) return;
-            using var bitmap = new Bitmap(selector.SelectedArea.Width, selector.SelectedArea.Height);
-            using (var graphics = Graphics.FromImage(bitmap))
-                graphics.CopyFromScreen(selector.SelectedArea.Location, Point.Empty, selector.SelectedArea.Size);
+            using (var bitmap = CaptureArea(selector.SelectedArea)) pages.Observe(bitmap, captureNow: true);
+            if (pages.Pages.Count == 0) throw new InvalidOperationException("El recorte es demasiado grande. Seleccioná solo la lista.");
+            if (kind == "specials" && !await CaptureEditsScrollAsync(selector.SelectedArea, pages, selected!.Vuelo, token))
+            { _status.Text = "Captura cancelada. No se enviaron imágenes ni se modificaron datos."; return; }
             Show(); Activate();
-            using (var preview = new VisionCaptureDialog(bitmap))
+            using (var preview = new VisionCaptureDialog(pages.Pages, limitReached: pages.LimitReached))
                 if (ShowForegroundDialog(preview) != DialogResult.OK) return;
             settings.ReserveRequest();
             Enabled = false;
-            _status.Text = $"Consultando Gemini ({settings.RequestsToday}/{settings.DailyLimit})…";
-            var result = await new GeminiVisionClient().ReadAsync(bitmap, kind, movement, selected?.Vuelo ?? "", settings, token);
+            _status.Text = $"Consultando Gemini con {pages.Pages.Count} pantallas ({settings.RequestsToday}/{settings.DailyLimit})…";
+            var result = await new GeminiVisionClient().ReadAsync(pages.Pages, kind, movement, selected?.Vuelo ?? "", settings, token);
             token.ThrowIfCancellationRequested();
+            if (pages.LimitReached) result.Warnings.Add("Se alcanzó el límite del lote. La última pantalla nueva puede haber quedado pendiente: continuá desde allí con otro lote del MISMO vuelo antes de dar el total por completo.");
             Enabled = true;
             if (kind is "ito" or "specials" && result.Ito.Vuelo.Length > 0 &&
                 VisionResult.FlightNumber(result.Ito.Vuelo) != VisionResult.FlightNumber(selected!.Vuelo) &&
                 VisionResult.FlightNumber(result.Ito.Vuelo) != VisionResult.FlightNumber(selected.SourceFlight))
                 throw new InvalidOperationException($"La captura corresponde a {result.Ito.Vuelo}, pero seleccionaste {selected.Vuelo}. No se cargaron los datos.");
-            using (var review = new VisionCaptureDialog(bitmap, Summary(result, kind, selected?.Vuelo ?? movement)))
+            using (var review = new VisionCaptureDialog(pages.Pages, Summary(result, kind, selected?.Vuelo ?? movement)))
                 if (ShowForegroundDialog(review) != DialogResult.OK) { _status.Text = "Respuesta descartada. Los datos anteriores se conservan."; return; }
             if (kind == "flights")
             {
@@ -170,7 +173,7 @@ public sealed partial class BubbleMainForm
                     _visionSpecials[selected!] = accumulator = new VisionSpecialAccumulator();
                 accumulator.Add(result.Specials);
                 FlightCorrections.SetCounts(selected!, accumulator.Counts());
-                _status.Text = $"{selected!.Vuelo}: {accumulator.UniquePassengers} pasajeros identificados. Capturá la siguiente página o editá los totales.";
+                _status.Text = $"{selected!.Vuelo}: {accumulator.UniquePassengers} pasajeros identificados. Podés continuar el scroll con otro lote del mismo vuelo o editar los totales.";
             }
             _arrivals.ResetBindings(); _departures.ResetBindings();
             _export.Enabled = AllFlights().Any();
@@ -190,6 +193,40 @@ public sealed partial class BubbleMainForm
         }
     }
 
+    private static Bitmap CaptureArea(Rectangle area)
+    {
+        var bitmap = new Bitmap(area.Width, area.Height);
+        try
+        {
+            using var graphics = Graphics.FromImage(bitmap);
+            graphics.CopyFromScreen(area.Location, Point.Empty, area.Size);
+            return bitmap;
+        }
+        catch { bitmap.Dispose(); throw; }
+    }
+
+    private static async Task<bool> CaptureEditsScrollAsync(Rectangle area, VisionPageBuffer pages, string flight, CancellationToken token)
+    {
+        using var bubble = new VisionScrollCaptureForm(flight, area);
+        bubble.UpdateState(pages.Pages.Count, pages.LimitReached, bubble.Bounds.IntersectsWith(area));
+        bubble.Show(); // Non-modal: Sabre remains available for mouse and keyboard scrolling.
+        while (!bubble.Cancelled)
+        {
+            token.ThrowIfCancellationRequested();
+            var overlaps = bubble.Bounds.IntersectsWith(area);
+            if (!overlaps && !pages.LimitReached)
+            {
+                using var frame = CaptureArea(area);
+                pages.Observe(frame, captureNow: bubble.CaptureRequested || bubble.Finished);
+                bubble.CaptureRequested = false;
+            }
+            bubble.UpdateState(pages.Pages.Count, pages.LimitReached, overlaps);
+            if (bubble.Finished) return true;
+            await Task.Delay(350, token);
+        }
+        return false;
+    }
+
     private static string Summary(VisionResult result, string kind, string context)
     {
         var text = $"Destino de la lectura: {context}\r\n\r\n";
@@ -206,20 +243,36 @@ public sealed partial class BubbleMainForm
 
 internal sealed class VisionCaptureDialog : Form
 {
-    public VisionCaptureDialog(Bitmap bitmap, string? summary = null)
+    public VisionCaptureDialog(IReadOnlyList<Bitmap> pages, string? summary = null, bool limitReached = false)
     {
         Text = summary is null ? "Revisar captura antes de enviar" : "Revisar respuesta de Gemini";
         StartPosition = FormStartPosition.CenterParent;
         Size = new Size(950, 700);
         MinimumSize = new Size(750, 500);
-        var image = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, Image = bitmap };
+        var image = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, Image = pages[0] };
         var note = new TextBox { Dock = DockStyle.Bottom, Height = summary is null ? 75 : 200, ReadOnly = true, Multiline = true, ScrollBars = ScrollBars.Vertical,
-            Text = summary ?? "Esta captura se enviará a Google Gemini. Usá solo capturas ficticias o anonimizadas, sin información personal ni confidencial. El servicio gratuito puede usar el contenido para mejorar sus productos." };
+            Text = summary ?? (limitReached ? "LOTE LLENO: después de cargar, continuá desde la pantalla pendiente del mismo vuelo.\r\n" : "") + $"Se enviarán {pages.Count} pantallas en una sola consulta. Revisalas con Anterior/Siguiente. Estas capturas se enviarán a Google Gemini. Usá solo capturas ficticias o anonimizadas, sin información personal ni confidencial. El servicio gratuito puede usar el contenido para mejorar sus productos." };
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(8) };
         var accept = new Button { Text = summary is null ? "Enviar captura" : "Cargar datos", DialogResult = DialogResult.OK, AutoSize = true };
         var cancel = new Button { Text = "Cancelar", DialogResult = DialogResult.Cancel, AutoSize = true };
         buttons.Controls.AddRange(new Control[] { accept, cancel });
-        Controls.Add(image); Controls.Add(note); Controls.Add(buttons);
+        var navigation = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 35 };
+        var previous = new Button { Text = "Anterior", AutoSize = true };
+        var next = new Button { Text = "Siguiente", AutoSize = true };
+        var pageLabel = new Label { AutoSize = true, Padding = new Padding(8) };
+        var index = 0;
+        void UpdatePage()
+        {
+            image.Image = pages[index];
+            pageLabel.Text = $"Pantalla {index + 1} de {pages.Count}";
+            previous.Enabled = index > 0;
+            next.Enabled = index + 1 < pages.Count;
+        }
+        previous.Click += (_, _) => { if (index > 0) index--; UpdatePage(); };
+        next.Click += (_, _) => { if (index + 1 < pages.Count) index++; UpdatePage(); };
+        navigation.Controls.AddRange(new Control[] { previous, next, pageLabel });
+        UpdatePage();
+        Controls.Add(image); Controls.Add(navigation); Controls.Add(note); Controls.Add(buttons);
         AcceptButton = accept; CancelButton = cancel;
     }
 }

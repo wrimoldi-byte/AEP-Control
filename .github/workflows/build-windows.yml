@@ -42,25 +42,25 @@ jobs:
       - name: Compilar ejecutable
         run: dotnet publish AEPControl/AEPControl.csproj --configuration Release --runtime win-x64 --self-contained true --output publish -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 
-      - name: Subir AEP Control v2.26.0 como artifact
+      - name: Subir AEP Control v2.27.0 como artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AEP-Control-v2.26.0-win-x64
+          name: AEP-Control-v2.27.0-win-x64
           path: publish/AEPControl.exe
           if-no-files-found: error
           retention-days: 30
 
-      - name: Crear o actualizar Release v2.26.0
+      - name: Crear o actualizar Release v2.27.0
         if: github.event_name != 'pull_request'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "v2.26.0"
+          $tag = "v2.27.0"
           $asset = "publish/AEPControl.exe"
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.26.0" --notes "Edición directa en las tablas de llegadas y salidas, sin ventana adicional. Doble clic o F2 para editar; Enter/Tab guarda y Esc cancela. Incluye Booking, EDITS e ITO con validación y protección frente a nuevas lecturas."
+            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.27.0" --notes "EDITS con IA permite scroll: marcá una zona, desplazate con pausas y terminá para revisar y enviar varias pantallas en una consulta. Conserva edición directa, validación y protección de correcciones."
           } else {
             gh release upload $tag $asset --repo $env:GITHUB_REPOSITORY --clobber
           }

@@ -1,4 +1,4 @@
-# AEP Control v2.26.0
+# AEP Control v2.27.0
 
 Prototipo portátil para Windows que lee por OCR la tabla de vuelos del siguiente turno.
 
@@ -13,7 +13,7 @@ El OCR se procesa localmente con el motor de Windows. No se conecta a Sabre ni e
 
 ## Descargar el EXE
 
-Entrar en **Actions**, abrir la ejecución más reciente y descargar el artefacto **AEP-Control-v2.26.0-win-x64**.
+Entrar en **Actions**, abrir la ejecución más reciente y descargar el artefacto **AEP-Control-v2.27.0-win-x64**.
 
 ## Requisitos
 
@@ -87,3 +87,15 @@ Refuerza las instrucciones de lectura de la hora por fila y movimiento. Normaliz
 ## v2.26.0
 
 Edición directa en las tablas de llegadas y salidas. Los cambios confirmados actualizan el mismo vuelo y el Excel; no se abre el editor aparte. Las correcciones conservan su protección ante OCR/IA. Revisión es una columna informativa. Las columnas tienen un ancho mínimo legible y desplazamiento horizontal.
+
+## v2.27.0: scroll de EDITS con IA
+
+1. Seleccioná **IA Gemini** y el vuelo. Abrí su lista de EDITS en Sabre y tocá **Leer EDITS**.
+2. Marcá la zona de la lista una vez. La primera pantalla queda guardada localmente.
+3. Hacé scroll en Sabre con pausas de un segundo. Conservá unas dos filas de solapamiento para no saltar pasajeros. El contador confirma las pantallas capturadas. También podés tocar **Capturar ahora**.
+4. La ventana flotante no bloquea Sabre. Si tapa el recorte, arrastrala desde el título fuera de la zona; mientras se superponen, la captura se pausa.
+5. Tocá **Terminar y revisar**, recorré las imágenes con **Anterior/Siguiente** y enviá el lote. Todas las imágenes van en una consulta. Revisá la respuesta antes de cargar los datos.
+
+No se envían imágenes durante el scroll. Cancelar o cerrar la ventana flotante descarta ese lote sin modificar los datos ni consumir una consulta. Las imágenes se mantienen solo en memoria y se liberan al terminar. Las capturas idénticas se omiten; las filas solapadas se acumulan por identidad de pasajero, conservando la prioridad de sillas para la misma persona. La interpretación por IA puede requerir corrección.
+
+Cada lote admite hasta 12 pantallas, 12 MB de PNG y 24 millones de píxeles. Al llenarse se avisa: cargá el lote y continuá desde la pantalla pendiente para el mismo vuelo. No mezcles vuelos ni corrijas manualmente los EDITS hasta terminar todos los lotes. La captura no implica que la lista esté completa; revisá el total al finalizar. Vuelos e ITO conservan su captura individual.
