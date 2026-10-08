@@ -93,15 +93,15 @@ internal static class Program
                 "Real inline table saves ITO, booking, EDITS and manual protections");
             Check(grid.Rows[0].Cells[nameof(FlightData.Edits)].FormattedValue?.ToString() == editorFlight.Edits, "Computed EDITS display reflects committed model");
             BeginCell(grid, nameof(FlightData.Booking), "900/900");
-            grid.CancelEdit();
+            typeof(DataGridView).GetMethod("ProcessDialogKey", flags)!.Invoke(grid, new object[] { Keys.Escape });
             Check(editorFlight.Booking == "7/156", "Cancel edit preserves previous booking");
             BeginCell(grid, nameof(FlightData.Hora), "25:70");
             Check(!FlightGridEditing.FinishEdit(grid) && editorFlight.Hora == "12:00", "Invalid time stays in cell without changing model");
-            grid.CancelEdit();
+            typeof(DataGridView).GetMethod("ProcessDialogKey", flags)!.Invoke(grid, new object[] { Keys.Escape });
             Check(grid.CurrentCell.ErrorText.Length == 0, "Cancel clears validation error");
             BeginCell(grid, nameof(FlightData.Edits), "WCHR 2; WCHR 3");
             Check(!FlightGridEditing.FinishEdit(grid) && editorFlight.WCHS == 2, "Duplicate EDIT rejected atomically in table");
-            grid.CancelEdit();
+            typeof(DataGridView).GetMethod("ProcessDialogKey", flags)!.Invoke(grid, new object[] { Keys.Escape });
             BeginCell(grid, nameof(FlightData.Hora), "0705");
             typeof(DataGridView).GetMethod("ProcessDialogKey", flags)!.Invoke(grid, new object[] { Keys.Tab });
             Check(editorFlight.Hora == "07:05" && grid.CurrentCell.ColumnIndex != grid.Columns[nameof(FlightData.Hora)].Index, "Tab normalizes time, saves and advances cell");

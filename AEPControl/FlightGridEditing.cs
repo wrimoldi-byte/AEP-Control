@@ -16,7 +16,7 @@ public static class FlightGridEditing
             catch (FormatException ex)
             {
                 grid.CurrentCell.ErrorText = ex.Message;
-                grid.Focus();
+                editor.Focus();
                 return false;
             }
         }
