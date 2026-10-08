@@ -135,7 +135,20 @@ public sealed partial class BubbleMainForm
             settings.ReserveRequest();
             Enabled = false;
             _status.Text = $"Consultando Gemini con {pages.Pages.Count} pantallas ({settings.RequestsToday}/{settings.DailyLimit})…";
-            var result = await new GeminiVisionClient().ReadAsync(pages.Pages, kind, movement, selected?.Vuelo ?? "", settings, token);
+            using var progressDialog = new GeminiProgressForm(pages.Pages.Count, _visionCts);
+            progressDialog.Show(this);
+            progressDialog.BringToFront();
+            var progress = new Progress<GeminiProgressInfo>(info => progressDialog.UpdateProgress(info));
+            VisionResult result;
+            try
+            {
+                result = await new GeminiVisionClient().ReadAsync(pages.Pages, kind, movement, selected?.Vuelo ?? "", settings, token, progress);
+                progressDialog.UpdateProgress(new GeminiProgressInfo("Completado", "Respuesta procesada. Cargando datos…", 6, 6, 1, 1));
+            }
+            finally
+            {
+                progressDialog.Close();
+            }
             token.ThrowIfCancellationRequested();
             if (pages.LimitReached) result.Warnings.Add("Se alcanzó el límite del lote. La última pantalla nueva puede haber quedado pendiente: continuá desde allí con otro lote del MISMO vuelo antes de dar el total por completo.");
             Enabled = true;
@@ -330,6 +343,81 @@ public sealed partial class BubbleMainForm
         };
         if (result.Warnings.Count > 0) text += "\r\n\r\nREVISAR:\r\n" + string.Join("\r\n", result.Warnings);
         return text + "\r\n\r\nDespués de cargar, editá directamente en la tabla con doble clic o F2. Enter/Tab guarda; Esc cancela.";
+    }
+}
+
+internal sealed class GeminiProgressForm : Form
+{
+    private readonly ProgressBar _bar = new() { Dock = DockStyle.Top, Height = 22, Minimum = 0, Maximum = 6 };
+    private readonly Label _title = new() { Dock = DockStyle.Top, Height = 34, Padding = new Padding(10, 8, 10, 0), Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold) };
+    private readonly Label _detail = new() { Dock = DockStyle.Fill, Padding = new Padding(10), AutoEllipsis = true };
+    private readonly Label _meta = new() { Dock = DockStyle.Bottom, Height = 26, Padding = new Padding(10, 2, 10, 0) };
+    private readonly Button _cancel = new() { Text = "Cancelar", AutoSize = true };
+    private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1000 };
+    private readonly DateTime _started = DateTime.Now;
+    private readonly CancellationTokenSource? _cts;
+    private int _attempt = 1;
+    private int _attempts = 2;
+
+    public GeminiProgressForm(int pages, CancellationTokenSource? cts)
+    {
+        _cts = cts;
+        Text = "Trabajo de Gemini";
+        StartPosition = FormStartPosition.CenterParent;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ControlBox = false;
+        ClientSize = new Size(520, 180);
+        TopMost = true;
+
+        _title.Text = "Preparando envío a Gemini…";
+        _detail.Text = $"Lote: {pages} pantalla{(pages == 1 ? "" : "s")}";
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 46, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(8) };
+        buttons.Controls.Add(_cancel);
+        Controls.Add(_detail);
+        Controls.Add(_meta);
+        Controls.Add(_bar);
+        Controls.Add(_title);
+        Controls.Add(buttons);
+
+        _cancel.Click += (_, _) => { _cancel.Enabled = false; _cancel.Text = "Cancelando…"; _cts?.Cancel(); };
+        _timer.Tick += (_, _) => UpdateMeta();
+        _timer.Start();
+        UpdateMeta();
+    }
+
+    public void UpdateProgress(GeminiProgressInfo info)
+    {
+        if (IsDisposed) return;
+        _title.Text = info.Stage;
+        _detail.Text = info.Detail;
+        _attempt = info.Attempt;
+        _attempts = info.MaxAttempts;
+        if (info.Step <= 0)
+        {
+            _bar.Style = ProgressBarStyle.Marquee;
+            _bar.MarqueeAnimationSpeed = 25;
+        }
+        else
+        {
+            _bar.Style = ProgressBarStyle.Continuous;
+            _bar.Value = Math.Clamp(info.Step, _bar.Minimum, _bar.Maximum);
+        }
+        UpdateMeta();
+        Refresh();
+    }
+
+    private void UpdateMeta()
+    {
+        var elapsed = DateTime.Now - _started;
+        _meta.Text = $"Intento {_attempt}/{_attempts} · Tiempo {elapsed:mm\\:ss}";
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _timer.Dispose();
+        base.Dispose(disposing);
     }
 }
 
