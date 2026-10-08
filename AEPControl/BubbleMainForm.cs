@@ -7,8 +7,8 @@ public sealed partial class BubbleMainForm : Form
 {
     private readonly BindingList<FlightData> _arrivals = new();
     private readonly BindingList<FlightData> _departures = new();
-    private readonly DataGridView _arrivalGrid = new();
-    private readonly DataGridView _departureGrid = new();
+    private readonly DataGridView _arrivalGrid = new FlightTableGrid();
+    private readonly DataGridView _departureGrid = new FlightTableGrid();
     private readonly Label _title = new();
     private readonly Label _help = new();
     private readonly Label _status = new();

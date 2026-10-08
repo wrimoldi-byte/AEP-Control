@@ -1,5 +1,21 @@
 namespace AEPControl;
 
+public sealed class FlightTableGrid : DataGridView
+{
+    private bool CancelCell(Keys keyData)
+    {
+        if ((keyData & Keys.KeyCode) != Keys.Escape || !IsCurrentCellInEditMode) return false;
+        var cell = CurrentCell;
+        CancelEdit();
+        // Virtual-mode cancellation does not always raise CellEndEdit.
+        if (cell is not null) { cell.ErrorText = ""; InvalidateCell(cell); }
+        return true;
+    }
+
+    protected override bool ProcessDialogKey(Keys keyData) => CancelCell(keyData) || base.ProcessDialogKey(keyData);
+    protected override bool ProcessDataGridViewKey(KeyEventArgs e) => CancelCell(e.KeyData) || base.ProcessDataGridViewKey(e);
+}
+
 // Keep FlightData as the single source of truth, including computed Booking/EDITS.
 // Virtual, unbound columns allow those values to be edited without adding OCR setters.
 public static class FlightGridEditing
