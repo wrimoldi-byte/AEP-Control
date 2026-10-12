@@ -1,3 +1,7 @@
+## v2.29.0 — EDITS libre con doble clic
+
+Doble clic sobre EDITS para escribir cualquier texto, código o aclaración. Enter o Tab guarda y Esc cancela. Se eliminó el botón Editar. El texto se conserva al exportar y queda protegido frente a OCR/IA. Si no tiene formato de cantidades, las columnas numéricas INF/ETO se exportan sin un total calculado. Permitir releer habilita su reemplazo por una nueva lectura.
+
 ## v2.28.0 — Captura EDITS sin saltos grandes
 
 - Se captura tras cada paso de rueda; antes se enviaban cinco juntos.

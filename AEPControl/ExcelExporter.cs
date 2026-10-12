@@ -120,12 +120,12 @@ public static class ExcelExporter
                 WriteCellOrDash(xw, $"J{row}", f.Configuracion, bodyStyle);
                 WriteCellOrDash(xw, $"K{row}", f.Booking, bodyStyle);
                 WriteCellOrDash(xw, $"L{row}", f.Servicios, bodyStyle);
-                WriteNumberOrDash(xw, $"M{row}", f.INF, f.EspecialesLeidos, bodyStyle);
+                WriteNumberOrDash(xw, $"M{row}", f.INF, f.EspecialesLeidos && f.ManualEditsCountsKnown, bodyStyle);
                 WriteCellOrDash(xw, $"N{row}", SpecialText(f, excludeDedicated: true), 9);
                 WriteCellOrDash(xw, $"O{row}", string.Empty, bodyStyle);
                 WriteCellOrDash(xw, $"P{row}", string.Empty, bodyStyle);
                 WriteCellOrDash(xw, $"Q{row}", string.Empty, bodyStyle);
-                WriteNumberOrDash(xw, $"R{row}", f.ETO, f.EspecialesLeidos, bodyStyle);
+                WriteNumberOrDash(xw, $"R{row}", f.ETO, f.EspecialesLeidos && f.ManualEditsCountsKnown, bodyStyle);
             }
             else
                 WriteStyledBlanks(xw, row, 6, 18, bodyStyle);
@@ -185,6 +185,7 @@ public static class ExcelExporter
     private static string SpecialText(FlightData f, bool excludeDedicated = false)
     {
         if (!f.EspecialesLeidos) return string.Empty;
+        if (f.ManualEditsText is not null) return f.ManualEditsText;
 
         var parts = new List<string>();
         Add(parts, "WCHR", f.WCHR);

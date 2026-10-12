@@ -26,8 +26,6 @@ public sealed partial class BubbleMainForm
         };
         var configure = new Button { Text = "Configurar IA", AutoSize = true };
         configure.Click += (_, _) => { using var dialog = new VisionSettingsForm(); ShowForegroundDialog(dialog); };
-        var edit = new Button { Text = "Editar celda (F2)", AutoSize = true };
-        edit.Click += (_, _) => EditSelectedFlight();
         var reread = new Button { Text = "Permitir releer", AutoSize = true };
         reread.Click += (_, _) =>
         {
@@ -40,10 +38,10 @@ public sealed partial class BubbleMainForm
             _arrivalGrid.Refresh(); _departureGrid.Refresh();
             _status.Text = $"{selected.Vuelo}: habilitado para una nueva lectura.";
         };
-        bar.Controls.AddRange(new Control[] { _readerMode, configure, edit, reread });
+        bar.Controls.AddRange(new Control[] { _readerMode, configure, reread });
         bar.Controls.SetChildIndex(_readerMode, 0);
         bar.Height = 135;
-        foreach (var button in new[] { configure, edit, reread })
+        foreach (var button in new[] { configure, reread })
         {
             button.FlatStyle = FlatStyle.Flat;
             button.BackColor = Color.FromArgb(137, 37, 103);
@@ -68,18 +66,6 @@ public sealed partial class BubbleMainForm
             TopMost = wasTopMost;
             if (!IsDisposed) { BringToFront(); Activate(); }
         }
-    }
-
-    private void EditSelectedFlight()
-    {
-        if (_visionBusy) return;
-        var selected = GetSelectedFlight();
-        if (selected is null) { _status.Text = "Seleccioná una celda para editar."; return; }
-        var grid = _arrivals.Contains(selected) ? _arrivalGrid : _departureGrid;
-        if (grid.CurrentCell is null || grid.CurrentCell.ReadOnly)
-            grid.CurrentCell = grid.CurrentRow!.Cells[nameof(FlightData.Edits)];
-        grid.Focus();
-        grid.BeginEdit(true);
     }
 
     private static void MergeRecognizedFlight(BindingList<FlightData> target, FlightData incoming)

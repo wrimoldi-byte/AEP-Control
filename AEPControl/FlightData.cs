@@ -43,10 +43,14 @@ public sealed class FlightData
 
     public Dictionary<string, int> ExtraSpecialCounts { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+    public string? ManualEditsText { get; set; }
+    public bool ManualEditsCountsKnown { get; set; } = true;
+
     public string Edits
     {
         get
         {
+            if (ManualEditsText is not null) return ManualEditsText;
             var parts = new List<string>();
             Add(parts, "WCHR", WCHR); Add(parts, "WCHS", WCHS); Add(parts, "WCHC", WCHC);
             Add(parts, "AVIH", AVIH); Add(parts, "INF", INF); Add(parts, "ETO", ETO); Add(parts, "UMNR", UMNR);

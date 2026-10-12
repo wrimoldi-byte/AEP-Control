@@ -124,8 +124,16 @@ internal static class Program
             typeof(DataGridView).GetMethod("ProcessDialogKey", flags)!.Invoke(grid, new object[] { Keys.Escape });
             Check(grid.CurrentCell.ErrorText.Length == 0, "Cancel clears validation error");
             BeginCell(grid, nameof(FlightData.Edits), "WCHR 2; WCHR 3");
-            Check(!FlightGridEditing.FinishEdit(grid) && editorFlight.WCHS == 2, "Duplicate EDIT rejected atomically in table");
-            typeof(DataGridView).GetMethod("ProcessDialogKey", flags)!.Invoke(grid, new object[] { Keys.Escape });
+            Check(FlightGridEditing.FinishEdit(grid) && editorFlight.Edits == "WCHR 2; WCHR 3" && !editorFlight.ManualEditsCountsKnown,
+                "Free EDITS accepts repeated codes without inventing numeric totals");
+            Edit(nameof(FlightData.Edits), "  silla pendiente / revisar con puerta ✈  ");
+            Check(editorFlight.Edits == "  silla pendiente / revisar con puerta ✈  " && editorFlight.WCHS == 0,
+                "Free EDITS preserves arbitrary text and removes stale counts");
+            FlightCorrections.SetCounts(editorFlight, new Dictionary<string, int> { ["WCHR"] = 99 });
+            Check(editorFlight.Edits == "  silla pendiente / revisar con puerta ✈  ", "Automatic reads preserve free text");
+            var specialText = typeof(ExcelExporter).GetMethod("SpecialText", BindingFlags.Static | BindingFlags.NonPublic)!;
+            Check((string)specialText.Invoke(null, new object[] { editorFlight, true })! == editorFlight.Edits, "Excel preserves free EDITS text");
+            Edit(nameof(FlightData.Edits), "WCHS 2; INF 1; ETO 3");
             BeginCell(grid, nameof(FlightData.Hora), "0705");
             typeof(DataGridView).GetMethod("ProcessDialogKey", flags)!.Invoke(grid, new object[] { Keys.Tab });
             Check(editorFlight.Hora == "07:05" && grid.CurrentCell.ColumnIndex != grid.Columns[nameof(FlightData.Hora)].Index, "Tab normalizes time, saves and advances cell");
@@ -144,6 +152,13 @@ internal static class Program
             BeginCell(arrivalGrid, nameof(FlightData.Edits), "");
             Check(arrivalGrid.EndEdit() && arrivals[0].WCHR == 0 && arrivals[0].INF == 0, "Clearing EDITS removes previous counts");
             Check(grid.Columns[nameof(FlightData.Revision)].ReadOnly, "Review marker remains read-only");
+            arrivalGrid.CurrentCell = arrivalGrid.Rows[0].Cells[nameof(FlightData.Edits)];
+            typeof(DataGridView).GetMethod("OnCellDoubleClick", flags)!.Invoke(arrivalGrid,
+                new object[] { new DataGridViewCellEventArgs(arrivalGrid.Columns[nameof(FlightData.Edits)].Index, 0) });
+            Check(arrivalGrid.IsCurrentCellInEditMode, "Double-click starts EDITS directly in the table");
+            ((TextBox)arrivalGrid.EditingControl!).Text = "lo que quiera / pendiente";
+            arrivalGrid.NotifyCurrentCellDirty(true);
+            Check(FlightGridEditing.FinishEdit(arrivalGrid) && arrivals[0].Edits == "lo que quiera / pendiente", "Double-click free text saves in arrivals");
             Check(Application.OpenForms.Count == 1, "Inline editing never opens another form");
             form.Close();
         }

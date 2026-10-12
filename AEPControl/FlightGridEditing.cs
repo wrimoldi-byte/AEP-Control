@@ -54,9 +54,14 @@ public static class FlightGridEditing
             column.MinimumWidth = column.Name == nameof(FlightData.Edits) ? 210 : 75;
             column.ToolTipText = column.ReadOnly ? "Correcciones protegidas frente a nuevas lecturas."
                 : column.Name == nameof(FlightData.Edits)
-                    ? "Doble clic para editar. Ejemplo: WCHR 2; INF 1; ETO 3. Borrá un código para quitarlo. WCHR 0 confirma cero."
+                    ? "Doble clic para escribir libremente. Enter/Tab guarda; Esc cancela."
                     : "Doble clic o F2 para editar. Enter/Tab confirma; Esc cancela.";
         }
+        grid.EditingControlShowing += (_, e) =>
+        {
+            if (e.Control is TextBox editor)
+                editor.MaxLength = grid.CurrentCell.OwningColumn.Name == nameof(FlightData.Edits) ? 0 : 32767;
+        };
         grid.CellValueNeeded += (_, e) =>
         {
             if (grid.Rows[e.RowIndex].DataBoundItem is FlightData flight)
@@ -99,7 +104,9 @@ public static class FlightGridEditing
         };
         grid.CellDoubleClick += (_, e) =>
         {
-            if (e.RowIndex >= 0 && e.ColumnIndex >= 0 && !grid.Columns[e.ColumnIndex].ReadOnly) grid.BeginEdit(true);
+            if (e.RowIndex < 0 || e.ColumnIndex < 0 || grid.Columns[e.ColumnIndex].ReadOnly) return;
+            grid.CurrentCell = grid.Rows[e.RowIndex].Cells[e.ColumnIndex];
+            grid.BeginEdit(false);
         };
         grid.DataError += (_, e) =>
         {

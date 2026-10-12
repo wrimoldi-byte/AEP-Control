@@ -36,9 +36,7 @@ public static class FlightCorrections
                 }
                 break;
             case nameof(FlightData.Edits):
-                var counts = ParseCounts(value);
-                value = string.Join(" · ", counts.Where(p => p.Value > 0).Select(p => $"{p.Key} {p.Value}"));
-                break;
+                return text; // Texto libre: conservar exactamente lo que escribió el usuario.
             case nameof(FlightData.Equipo):
             case nameof(FlightData.Matricula):
             case nameof(FlightData.Configuracion):
@@ -56,7 +54,20 @@ public static class FlightCorrections
         // An explicit zero such as WCHR 0 confirms an unread, empty EDITS cell.
         if (current == value && !(property == nameof(FlightData.Edits) && text.Trim().Length > 0 && !flight.EspecialesLeidos)) return;
         if (property == nameof(FlightData.Edits))
-            SetCounts(flight, ParseCounts(value), manual: true);
+        {
+            Dictionary<string, int> counts;
+            var countsKnown = true;
+            try { counts = ParseCounts(value); }
+            catch (FormatException)
+            {
+                // Free text is valid input, but cannot safely become numeric totals.
+                counts = new Dictionary<string, int>();
+                countsKnown = false;
+            }
+            SetCounts(flight, counts, manual: true);
+            flight.ManualEditsText = value;
+            flight.ManualEditsCountsKnown = countsKnown;
+        }
         else if (property == nameof(FlightData.Booking))
         {
             var parts = value.Split('/');
@@ -103,6 +114,8 @@ public static class FlightCorrections
         if (!manual && flight.ManualFields.Contains(nameof(FlightData.Edits))) return;
         if (counts.Any(p => !Regex.IsMatch(p.Key, @"^[A-Z0-9]{3,6}$") || p.Value is < 0 or > 999))
             throw new FormatException("Código o cantidad de EDIT fuera de rango.");
+        flight.ManualEditsText = null;
+        flight.ManualEditsCountsKnown = true;
         foreach (var code in CountProperties.Keys)
             typeof(FlightData).GetProperty(code)!.SetValue(flight, counts.GetValueOrDefault(code));
         flight.ExtraSpecialCounts.Clear();
