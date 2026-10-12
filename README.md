@@ -1,3 +1,11 @@
+## v2.28.0 — Captura EDITS sin saltos grandes
+
+- Se captura tras cada paso de rueda; antes se enviaban cinco juntos.
+- Se espera a que la imagen se estabilice antes de guardar y se detectan cambios pequeños de texto.
+- Se detiene el desplazamiento al alcanzar el límite de pantallas, bytes o píxeles y se informa que la lectura es parcial.
+- Windows debe tener la rueda configurada en 1 a 3 líneas por paso. Seleccioná la lista completa visible, incluyendo la numeración, y empezá desde arriba.
+- Revisá que las capturas compartan filas y no falten números. Si se llena el lote, continuá desde donde quedó Sabre con otro lote del mismo vuelo. La continuidad numérica todavía no se valida automáticamente.
+
 # AEP Control v2.27.0
 
 Prototipo portátil para Windows que lee por OCR la tabla de vuelos del siguiente turno.

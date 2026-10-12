@@ -24,6 +24,30 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
+        // Regression: a mostly white passenger table is not "unchanged" when
+        // only a small text/number region changes after scrolling.
+        var compareFrames = typeof(BubbleMainForm).GetMethod("FramesAreSimilar", BindingFlags.Static | BindingFlags.NonPublic)!;
+        using (var before = new Bitmap(800, 400))
+        using (var after = new Bitmap(800, 400))
+        {
+            using (var g = Graphics.FromImage(before)) g.Clear(Color.White);
+            using (var g = Graphics.FromImage(after)) g.Clear(Color.White);
+            Check((bool)compareFrames.Invoke(null, new object[] { before, after })!, "Identical tables end scrolling");
+            using (var g = Graphics.FromImage(after)) g.FillRectangle(Brushes.Black, 40, 40, 30, 10);
+            Check(!(bool)compareFrames.Invoke(null, new object[] { before, after })!, "Sparse passenger changes must not end scrolling early");
+        }
+        using (var full = new VisionPageBuffer())
+        using (var page = new Bitmap(20, 20))
+        {
+            full.Observe(page, true);
+            full.MarkLimitReached();
+            Check(full.LimitReached && full.Pages.Count == 1, "A full batch warns even when the current page is a duplicate");
+        }
+        using (var limited = new VisionPageBuffer())
+        using (var oversized = new Bitmap(5000, 5000))
+        {
+            Check(!limited.Observe(oversized, true) && limited.LimitReached, "Pixel budget rejects a pending page and signals capture must stop");
+        }
         var parsed = VisionResult.Parse(Fixture());
         Check(parsed.Flights.Single().Vuelo == "LA8035" && parsed.Flights.Single().Economy == 156, "IA preserves 156 without 3/5 substitution");
         Check(parsed.Ito.Configuracion == "12/156", "ITO configuration separators preserved");

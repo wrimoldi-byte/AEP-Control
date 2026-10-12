@@ -36,6 +36,8 @@ public sealed class VisionPageBuffer : IDisposable
         return true;
     }
 
+    public void MarkLimitReached() => LimitReached = true;
+
     public void Dispose()
     {
         foreach (var page in _pages) page.Dispose();

@@ -125,7 +125,7 @@ public sealed partial class BubbleMainForm
             await Task.Delay(250, token);
             using var selector = new SelectionForm();
             if (selector.ShowDialog() != DialogResult.OK) return;
-            using (var bitmap = CaptureArea(selector.SelectedArea)) pages.Observe(bitmap, captureNow: true);
+            using (var bitmap = await CaptureStableAreaAsync(selector.SelectedArea, token)) pages.Observe(bitmap, captureNow: true);
             if (pages.Pages.Count == 0) throw new InvalidOperationException("El recorte es demasiado grande. Seleccioná solo la lista.");
             if (kind == "specials" && !await CaptureEditsAutoScrollAsync(selector.SelectedArea, pages, selected!.Vuelo, token))
             { _status.Text = "Captura cancelada. No se enviaron imágenes ni se modificaron datos."; return; }
@@ -223,6 +223,10 @@ public sealed partial class BubbleMainForm
     {
         // Sólo se usa en modo IA para EDITS. El formulario principal ya está oculto,
         // de modo que Sabre queda visible debajo de la zona seleccionada.
+        // A wheel notch follows the user's Windows setting. Reject page-sized or
+        // unusually large jumps rather than silently skipping unseen passengers.
+        if (SystemInformation.MouseWheelScrollLines < 1 || SystemInformation.MouseWheelScrollLines > 3)
+            throw new InvalidOperationException("Para capturar EDITS sin saltos, configurá la rueda de Windows en 1 a 3 líneas por paso (no una pantalla). Después reiniciá la captura desde el principio de la lista.");
         var originalCursor = Cursor.Position;
         using var previous = CaptureArea(area);
         var previousFrame = (Bitmap)previous.Clone();
@@ -238,16 +242,15 @@ public sealed partial class BubbleMainForm
 
                 if (pages.Pages.Count >= VisionPageBuffer.MaxPages)
                 {
-                    // Fuerza la marca de lote lleno sin guardar otra imagen.
-                    using var extra = CaptureArea(area);
-                    pages.Observe(extra, captureNow: true);
+                    // No avanzar: la siguiente lectura retoma desde esta misma pantalla.
+                    pages.MarkLimitReached();
                     return true;
                 }
 
-                ScrollWindowAt(area, -600);
-                await Task.Delay(850, token);
-
-                using var frame = CaptureArea(area);
+                // -600 enviaba CINCO pasos juntos (15 líneas con Windows por defecto).
+                // Guardar cada paso para conservar filas compartidas entre capturas.
+                ScrollWindowAt(area, -120);
+                using var frame = await CaptureStableAreaAsync(area, token);
                 if (FramesAreSimilar(previousFrame, frame))
                 {
                     unchangedAfterScroll++;
@@ -257,6 +260,9 @@ public sealed partial class BubbleMainForm
 
                 unchangedAfterScroll = 0;
                 pages.Observe(frame, captureNow: true);
+                // Incluye el límite de bytes/píxeles: no seguir moviendo Sabre si
+                // esta pantalla quedó pendiente de guardar en el siguiente lote.
+                if (pages.LimitReached) return true;
 
                 previousFrame.Dispose();
                 previousFrame = (Bitmap)frame.Clone();
@@ -288,25 +294,54 @@ public sealed partial class BubbleMainForm
         mouse_event(0x0800, 0, 0, delta, UIntPtr.Zero); // MOUSEEVENTF_WHEEL
     }
 
+    private static async Task<Bitmap> CaptureStableAreaAsync(Rectangle area, CancellationToken token)
+    {
+        // Allow Sabre to begin repainting, then require consecutive stable samples.
+        await Task.Delay(650, token);
+        Bitmap? previous = CaptureArea(area);
+        try
+        {
+            var stableSamples = 0;
+            for (var attempt = 0; attempt < 16; attempt++)
+            {
+                token.ThrowIfCancellationRequested();
+                if ((GetAsyncKeyState((int)Keys.Escape) & 0x8000) != 0)
+                    throw new OperationCanceledException(token);
+                await Task.Delay(200, token);
+                var current = CaptureArea(area);
+                stableSamples = FramesAreSimilar(previous!, current) ? stableSamples + 1 : 0;
+                previous!.Dispose();
+                previous = current;
+                if (stableSamples >= 2)
+                {
+                    var result = previous;
+                    previous = null;
+                    return result!;
+                }
+            }
+            throw new InvalidOperationException("La lista no dejó de moverse. No se enviaron datos. Dejá Sabre quieto y repetí la captura desde el principio de la lista.");
+        }
+        finally { previous?.Dispose(); }
+    }
+
     private static bool FramesAreSimilar(Bitmap a, Bitmap b)
     {
         if (a.Width != b.Width || a.Height != b.Height) return false;
 
-        long difference = 0;
+        // A mean colour difference hid changes to sparse text on white tables.
+        // Count changed samples instead, with a dense grid over passenger text.
+        long changed = 0;
         long samples = 0;
-        var stepX = Math.Max(8, a.Width / 80);
-        var stepY = Math.Max(8, a.Height / 60);
-
-        for (var y = stepY / 2; y < a.Height; y += stepY)
-        for (var x = stepX / 2; x < a.Width; x += stepX)
+        for (var y = 1; y < a.Height; y += 3)
+        for (var x = 1; x < a.Width; x += 3)
         {
             var ca = a.GetPixel(x, y);
             var cb = b.GetPixel(x, y);
-            difference += Math.Abs(ca.R - cb.R) + Math.Abs(ca.G - cb.G) + Math.Abs(ca.B - cb.B);
-            samples += 3;
+            if (Math.Abs(ca.R - cb.R) + Math.Abs(ca.G - cb.G) + Math.Abs(ca.B - cb.B) > 30)
+                changed++;
+            samples++;
         }
-
-        return samples > 0 && (double)difference / samples < 3.0;
+        return samples > 0 && (double)changed / samples < 0.0005;
     }
 
     [StructLayout(LayoutKind.Sequential)]
