@@ -1,3 +1,9 @@
+## v2.30.0 — Menos capturas de EDITS
+
+Ajustado para la lista de aproximadamente 9 pasajeros visibles: avanza 6 líneas según la configuración de rueda de Windows (dos pasos con la configuración habitual de 3 líneas). El margen esperado es de 3 pasajeros entre imágenes. La espera mínima baja de 1,05 s a 0,55 s, manteniendo dos comprobaciones consecutivas de estabilidad y esperando más si sigue moviéndose. Con Windows en 3 líneas, se espera aproximadamente la mitad de capturas en listas largas respecto de v2.29.0.
+
+La cantidad real de pasajeros desplazados depende de Sabre y la altura de las filas. Seleccioná toda la lista visible y comprobá el solapamiento en la vista previa, especialmente si cambiás el tamaño de ventana. Se conservan los límites de lote y la edición libre.
+
 ## v2.29.0 — EDITS libre con doble clic
 
 Doble clic sobre EDITS para escribir cualquier texto, código o aclaración. Enter o Tab guarda y Esc cancela. Se eliminó el botón Editar. El texto se conserva al exportar y queda protegido frente a OCR/IA. Si no tiene formato de cantidades, las columnas numéricas INF/ETO se exportan sin un total calculado. Permitir releer habilita su reemplazo por una nueva lectura.

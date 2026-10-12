@@ -233,9 +233,9 @@ public sealed partial class BubbleMainForm
                     return true;
                 }
 
-                // -600 enviaba CINCO pasos juntos (15 líneas con Windows por defecto).
-                // Guardar cada paso para conservar filas compartidas entre capturas.
-                ScrollWindowAt(area, -120);
+                // La lista muestra aproximadamente 9 pasajeros. Avanzar como máximo
+                // 6 líneas de Windows deja un margen estimado de 3 filas compartidas.
+                ScrollWindowAt(area, EditsScrollDelta(SystemInformation.MouseWheelScrollLines));
                 using var frame = await CaptureStableAreaAsync(area, token);
                 if (FramesAreSimilar(previousFrame, frame))
                 {
@@ -266,6 +266,14 @@ public sealed partial class BubbleMainForm
 
     private static string _visionScrollStatus = "";
 
+    private static int EditsScrollDelta(int linesPerNotch)
+    {
+        if (linesPerNotch < 1 || linesPerNotch > 3)
+            throw new ArgumentOutOfRangeException(nameof(linesPerNotch));
+        const int targetLines = 6;
+        return -120 * (targetLines / linesPerNotch);
+    }
+
     private static void ScrollWindowAt(Rectangle area, int delta)
     {
         var point = new POINT(area.Left + area.Width / 2, area.Top + area.Height / 2);
@@ -283,17 +291,17 @@ public sealed partial class BubbleMainForm
     private static async Task<Bitmap> CaptureStableAreaAsync(Rectangle area, CancellationToken token)
     {
         // Allow Sabre to begin repainting, then require consecutive stable samples.
-        await Task.Delay(650, token);
+        await Task.Delay(250, token);
         Bitmap? previous = CaptureArea(area);
         try
         {
             var stableSamples = 0;
-            for (var attempt = 0; attempt < 16; attempt++)
+            for (var attempt = 0; attempt < 24; attempt++)
             {
                 token.ThrowIfCancellationRequested();
                 if ((GetAsyncKeyState((int)Keys.Escape) & 0x8000) != 0)
                     throw new OperationCanceledException(token);
-                await Task.Delay(200, token);
+                await Task.Delay(150, token);
                 var current = CaptureArea(area);
                 stableSamples = FramesAreSimilar(previous!, current) ? stableSamples + 1 : 0;
                 previous!.Dispose();

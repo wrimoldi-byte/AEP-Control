@@ -24,6 +24,13 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
+        var scrollDelta = typeof(BubbleMainForm).GetMethod("EditsScrollDelta", BindingFlags.Static | BindingFlags.NonPublic)!;
+        foreach (var lines in new[] { 1, 2, 3 })
+        {
+            var delta = (int)scrollDelta.Invoke(null, new object[] { lines })!;
+            Check(delta < 0 && (-delta / 120) * lines == 6,
+                "Scroll advances six configured lines, retaining margin in a nine-row viewport: " + lines);
+        }
         // Regression: a mostly white passenger table is not "unchanged" when
         // only a small text/number region changes after scrolling.
         var compareFrames = typeof(BubbleMainForm).GetMethod("FramesAreSimilar", BindingFlags.Static | BindingFlags.NonPublic)!;
