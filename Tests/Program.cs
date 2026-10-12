@@ -21,9 +21,59 @@ internal static class Program
         throw new Exception("Expected rejection: " + description);
     }
 
+    private static void TestStitching()
+    {
+        using var document = new Bitmap(320, 3200);
+        using (var g = Graphics.FromImage(document)) g.Clear(Color.White);
+        var random = new Random(42);
+        for (var y = 0; y < document.Height; y++)
+            for (var n = 0; n < 35; n++) document.SetPixel(random.Next(5, 280), y, Color.Black);
+        Bitmap Capture(int offset)
+        {
+            var image = new Bitmap(320, 300);
+            using var g = Graphics.FromImage(image);
+            g.Clear(Color.LightBlue);
+            g.DrawImage(document, new Rectangle(0, 20, 320, 270), new Rectangle(0, offset, 320, 270), GraphicsUnit.Pixel);
+            return image;
+        }
+        using var first = Capture(0);
+        using var second = Capture(180);
+        using (var joined = VisionPageStitcher.Build(new[] { first, second }))
+        {
+            Check(joined.Pages.Count == 1 && joined.JoinedPairs == 1 && joined.Pages[0].Height == 480,
+                "Overlapping captures become one image without repeated body/header/footer");
+            var exact = true;
+            for (var y = 0; y < 450; y++)
+                for (var x = 0; x < 296; x++)
+                    if (joined.Pages[0].GetPixel(x, y + 20) != document.GetPixel(x, y)) exact = false;
+            Check(exact, "Every source passenger pixel survives stitching at native resolution in order");
+        }
+        using var unrelated = Capture(800);
+        using (var retained = VisionPageStitcher.Build(new[] { first, unrelated }))
+            Check(retained.Pages.Count == 2 && retained.UncertainPairs == 1 && retained.Pages[1].Height == 300,
+                "Non-overlapping captures remain intact");
+        using var blank = new Bitmap(320, 300);
+        using (var g = Graphics.FromImage(blank)) g.Clear(Color.White);
+        using (var retained = VisionPageStitcher.Build(new[] { blank, blank }))
+            Check(retained.JoinedPairs == 0, "Blank areas cannot prove passenger overlap");
+        var many = Enumerable.Range(0, 15).Select(i => Capture(i * 180)).ToArray();
+        try
+        {
+            using var split = VisionPageStitcher.Build(many);
+            Check(split.Pages.Count > 1 && split.Pages.All(p => p.Height <= VisionPageStitcher.MaxJoinedHeight) && split.JoinedPairs == 14,
+                "Long lists split into readable images without resizing");
+            Check(split.Pages.Sum(p => p.Height) == 20 + 270 + 14 * 180 + 10, "Splitting preserves all novel rows");
+        }
+        finally { foreach (var page in many) page.Dispose(); }
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        Throws(() => VisionPageStitcher.Build(new[] { first }, cancelled.Token), "Stitching honors cancellation");
+    }
+
     [STAThread]
     private static void Main()
     {
+        TestStitching();
         var scrollDelta = typeof(BubbleMainForm).GetMethod("EditsScrollDelta", BindingFlags.Static | BindingFlags.NonPublic)!;
         foreach (var lines in new[] { 1, 2, 3 })
         {

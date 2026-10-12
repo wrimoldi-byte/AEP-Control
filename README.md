@@ -1,3 +1,7 @@
+## v2.31.0 — Unir capturas antes de Gemini
+
+Las capturas EDITS se alinean por coincidencia de píxeles en franjas con texto. Se recortan los solapamientos inequívocos y se concatenan a resolución original, en imágenes de hasta 2400 píxeles de alto (una captura original mayor se conserva intacta). No se borran pasajeros por similitud de nombres. Las coincidencias dudosas permanecen en imágenes separadas. La vista previa permite desplazarse por la imagen a tamaño real y muestra cuántas capturas se unieron. No se garantiza una única imagen ni una reducción fija de tiempo en Gemini.
+
 ## v2.30.0 — Menos capturas de EDITS
 
 Ajustado para la lista de aproximadamente 9 pasajeros visibles: avanza 6 líneas según la configuración de rueda de Windows (dos pasos con la configuración habitual de 3 líneas). El margen esperado es de 3 pasajeros entre imágenes. La espera mínima baja de 1,05 s a 0,55 s, manteniendo dos comprobaciones consecutivas de estabilidad y esperando más si sigue moviéndose. Con Windows en 3 líneas, se espera aproximadamente la mitad de capturas en listas largas respecto de v2.29.0.

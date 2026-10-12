@@ -116,19 +116,24 @@ public sealed partial class BubbleMainForm
             if (kind == "specials" && !await CaptureEditsAutoScrollAsync(selector.SelectedArea, pages, selected!.Vuelo, token))
             { _status.Text = "Captura cancelada. No se enviaron imágenes ni se modificaron datos."; return; }
             Show(); Activate();
-            using (var preview = new VisionCaptureDialog(pages.Pages, limitReached: pages.LimitReached))
+            _status.Text = "Uniendo capturas y recortando repeticiones…";
+            using var joined = kind == "specials"
+                ? await Task.Run(() => VisionPageStitcher.Build(pages.Pages, token), token) : null;
+            IReadOnlyList<Bitmap> sendPages = joined is null ? pages.Pages : joined.Pages;
+            var stitchSummary = joined?.Summary(pages.Pages.Count);
+            using (var preview = new VisionCaptureDialog(sendPages, limitReached: pages.LimitReached, captureNote: stitchSummary))
                 if (ShowForegroundDialog(preview) != DialogResult.OK) return;
             settings.ReserveRequest();
             Enabled = false;
-            _status.Text = $"Consultando Gemini con {pages.Pages.Count} pantallas ({settings.RequestsToday}/{settings.DailyLimit})…";
-            using var progressDialog = new GeminiProgressForm(pages.Pages.Count, _visionCts);
+            _status.Text = $"Consultando Gemini con {sendPages.Count} imágenes ({settings.RequestsToday}/{settings.DailyLimit})…";
+            using var progressDialog = new GeminiProgressForm(sendPages.Count, _visionCts);
             progressDialog.Show(this);
             progressDialog.BringToFront();
             var progress = new Progress<GeminiProgressInfo>(info => progressDialog.UpdateProgress(info));
             VisionResult result;
             try
             {
-                result = await new GeminiVisionClient().ReadAsync(pages.Pages, kind, movement, selected?.Vuelo ?? "", settings, token, progress);
+                result = await new GeminiVisionClient().ReadAsync(sendPages, kind, movement, selected?.Vuelo ?? "", settings, token, progress);
                 progressDialog.UpdateProgress(new GeminiProgressInfo("Completado", "Respuesta procesada. Cargando datos…", 6, 6, 1, 1));
             }
             finally
@@ -142,7 +147,7 @@ public sealed partial class BubbleMainForm
                 VisionResult.FlightNumber(result.Ito.Vuelo) != VisionResult.FlightNumber(selected!.Vuelo) &&
                 VisionResult.FlightNumber(result.Ito.Vuelo) != VisionResult.FlightNumber(selected.SourceFlight))
                 throw new InvalidOperationException($"La captura corresponde a {result.Ito.Vuelo}, pero seleccionaste {selected.Vuelo}. No se cargaron los datos.");
-            using (var review = new VisionCaptureDialog(pages.Pages, Summary(result, kind, selected?.Vuelo ?? movement)))
+            using (var review = new VisionCaptureDialog(sendPages, Summary(result, kind, selected?.Vuelo ?? movement)))
                 if (ShowForegroundDialog(review) != DialogResult.OK) { _status.Text = "Respuesta descartada. Los datos anteriores se conservan."; return; }
             if (kind == "flights")
             {
@@ -452,15 +457,17 @@ internal sealed class GeminiProgressForm : Form
 
 internal sealed class VisionCaptureDialog : Form
 {
-    public VisionCaptureDialog(IReadOnlyList<Bitmap> pages, string? summary = null, bool limitReached = false)
+    public VisionCaptureDialog(IReadOnlyList<Bitmap> pages, string? summary = null, bool limitReached = false, string? captureNote = null)
     {
         Text = summary is null ? "Revisar captura antes de enviar" : "Revisar respuesta de Gemini";
         StartPosition = FormStartPosition.CenterParent;
         Size = new Size(950, 700);
         MinimumSize = new Size(750, 500);
-        var image = new PictureBox { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, Image = pages[0] };
+        var viewport = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+        var image = new PictureBox { SizeMode = PictureBoxSizeMode.AutoSize, Image = pages[0] };
+        viewport.Controls.Add(image);
         var note = new TextBox { Dock = DockStyle.Bottom, Height = summary is null ? 75 : 200, ReadOnly = true, Multiline = true, ScrollBars = ScrollBars.Vertical,
-            Text = summary ?? (limitReached ? "LOTE LLENO: después de cargar, continuá desde la pantalla pendiente del mismo vuelo.\r\n" : "") + $"Se enviarán {pages.Count} pantallas en una sola consulta. Revisalas con Anterior/Siguiente. Estas capturas se enviarán a Google Gemini. Usá solo capturas ficticias o anonimizadas, sin información personal ni confidencial. El servicio gratuito puede usar el contenido para mejorar sus productos." };
+            Text = summary ?? (captureNote is null ? "" : captureNote + "\r\n") + (limitReached ? "LOTE LLENO: después de cargar, continuá desde la pantalla pendiente del mismo vuelo.\r\n" : "") + $"Se enviarán {pages.Count} pantallas en una sola consulta. Revisalas con Anterior/Siguiente. Estas capturas se enviarán a Google Gemini. Usá solo capturas ficticias o anonimizadas, sin información personal ni confidencial. El servicio gratuito puede usar el contenido para mejorar sus productos." };
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(8) };
         var accept = new Button { Text = summary is null ? "Enviar captura" : "Cargar datos", DialogResult = DialogResult.OK, AutoSize = true };
         var cancel = new Button { Text = "Cancelar", DialogResult = DialogResult.Cancel, AutoSize = true };
@@ -473,6 +480,7 @@ internal sealed class VisionCaptureDialog : Form
         void UpdatePage()
         {
             image.Image = pages[index];
+            viewport.AutoScrollPosition = Point.Empty;
             pageLabel.Text = $"Pantalla {index + 1} de {pages.Count}";
             previous.Enabled = index > 0;
             next.Enabled = index + 1 < pages.Count;
@@ -481,7 +489,7 @@ internal sealed class VisionCaptureDialog : Form
         next.Click += (_, _) => { if (index + 1 < pages.Count) index++; UpdatePage(); };
         navigation.Controls.AddRange(new Control[] { previous, next, pageLabel });
         UpdatePage();
-        Controls.Add(image); Controls.Add(navigation); Controls.Add(note); Controls.Add(buttons);
+        Controls.Add(viewport); Controls.Add(navigation); Controls.Add(note); Controls.Add(buttons);
         AcceptButton = accept; CancelButton = cancel;
     }
 }
