@@ -30,6 +30,12 @@ public sealed class CdcBkupReader
     private readonly HashSet<string> _unassignedKeys = new(StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<CdcPassengerEntry> Passengers => _passengers;
+    // Compatibility with the original BKUP-only reader and its regression tests.
+    public IReadOnlyList<CdcBkupFinding> Findings => _passengers
+        .Where(p => p.Status != CdcBkupStatus.NotDetected)
+        .Select(p => new CdcBkupFinding(p.Passenger, p.Evidence, p.Page, p.Status == CdcBkupStatus.Detected))
+        .Concat(_unassigned).ToList();
+    public int UnidentifiedCount => _unassigned.Count;
     public IReadOnlyList<CdcBkupFinding> Unassigned => _unassigned;
     public int ExactCount => _passengers.Count(p => p.Status == CdcBkupStatus.Detected);
     public int PossibleCount => _passengers.Count(p => p.Status == CdcBkupStatus.Uncertain);
