@@ -1,3 +1,12 @@
+## v2.32.0 — CDC EE.UU.: búsqueda de EDITS BKUP
+
+- Nuevo botón **CDC EE.UU. · BKUP**, independiente del recuento de especiales.
+- Para usarlo: abrir en Sabre la lista de EDITS correspondiente a pasajeros con destino o conexión en EE.UU., ubicar el inicio de la lista, pulsar el botón y seleccionar el área que incluye nombres y códigos.
+- El programa captura localmente y hace scroll por Sabre, con solapamiento entre capturas. Hasta 12 pantallas por lote; si alcanza el límite, avisa que el resultado es parcial para continuar desde donde quedó.
+- OCR local detecta **BKUP**, informa posibles lecturas dudosas **8KUP**, y elimina duplicados solamente cuando el nombre del pasajero es legible en la misma fila. Las líneas sin identidad se conservan para revisión, sin contarlas como pasajeros únicos.
+- La vista de resultados permite marcar manualmente la columna **Declaración CDC revisada** y copiar el reporte. No se transmite información de pasajeros a Gemini.
+- **Importante:** BKUP es un edit de Sabre, no prueba por sí mismo que el pasajero haya presentado una declaración válida. La ausencia de un BKUP en una lista de EDITS tampoco prueba falta de declaración. El CDC requiere que la aerolínea confirme la declaración firmada de cada pasajero que embarca hacia EE.UU., incluidos los tránsitos por EE.UU. El operador debe comprobarla mediante el procedimiento vigente de LATAM.
+
 ## v2.31.0 — Unir capturas antes de Gemini
 
 Las capturas EDITS se alinean por coincidencia de píxeles en franjas con texto. Se recortan los solapamientos inequívocos y se concatenan a resolución original, en imágenes de hasta 2400 píxeles de alto (una captura original mayor se conserva intacta). No se borran pasajeros por similitud de nombres. Las coincidencias dudosas permanecen en imágenes separadas. La vista previa permite desplazarse por la imagen a tamaño real y muestra cuántas capturas se unieron. No se garantiza una única imagen ni una reducción fija de tiempo en Gemini.
