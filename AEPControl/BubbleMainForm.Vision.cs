@@ -216,8 +216,11 @@ public sealed partial class BubbleMainForm
         // de modo que Sabre queda visible debajo de la zona seleccionada.
         // A wheel notch follows the user's Windows setting. Reject page-sized or
         // unusually large jumps rather than silently skipping unseen passengers.
-        if (SystemInformation.MouseWheelScrollLines < 1 || SystemInformation.MouseWheelScrollLines > 3)
-            throw new InvalidOperationException("Para capturar EDITS sin saltos, configurá la rueda de Windows en 1 a 3 líneas por paso (no una pantalla). Después reiniciá la captura desde el principio de la lista.");
+        if (SystemInformation.MouseWheelScrollLines < 1 || SystemInformation.MouseWheelScrollLines > 6)
+        {
+            _visionScrollStatus = $"IA EDITS · {flight}: configuración de rueda incompatible, modo manual.";
+            return await CaptureEditsManualScrollAsync(area, pages, flight, token);
+        }
         var originalCursor = Cursor.Position;
         using var previous = CaptureArea(area);
         var previousFrame = (Bitmap)previous.Clone();
@@ -286,10 +289,10 @@ public sealed partial class BubbleMainForm
 
     private static int EditsScrollDelta(int linesPerNotch)
     {
-        if (linesPerNotch < 1 || linesPerNotch > 3)
+        if (linesPerNotch < 1 || linesPerNotch > 6)
             throw new ArgumentOutOfRangeException(nameof(linesPerNotch));
         const int targetLines = 6;
-        return -120 * (targetLines / linesPerNotch);
+        return -120 * Math.Max(1, targetLines / linesPerNotch);
     }
 
     private static async Task<Bitmap> ScrollAndCaptureAsync(
