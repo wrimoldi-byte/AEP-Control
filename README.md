@@ -1,3 +1,9 @@
+## v2.33.1 — Corrección de scroll de Gemini en EDITS
+
+- La captura IA de EDITS intenta enfocar Sabre y mover la rueda con entrada nativa; si no detecta cambios, prueba mensajes de scroll dirigidos al control.
+- Si Sabre no se desplaza, cambia a **captura manual asistida** y avisa. No envía a Gemini una única pantalla como si fuera la lista entera sin que el operador confirme.
+- Conserva el límite de 12 pantallas, los solapamientos, la deduplicación y la revisión de capturas. No altera el escaneo CDC, que sigue siendo manual.
+
 ## v2.32.0 — CDC EE.UU.: búsqueda de EDITS BKUP
 
 - Nuevo botón **CDC EE.UU. · BKUP**, independiente del recuento de especiales.
