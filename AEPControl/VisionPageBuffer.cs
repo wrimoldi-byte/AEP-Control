@@ -52,10 +52,12 @@ public sealed class VisionScrollCaptureForm : Form
     public bool Finished { get; private set; }
     public bool Cancelled { get; private set; }
     public bool CaptureRequested { get; set; }
+    private readonly bool _autoScrollFallback;
 
-    public VisionScrollCaptureForm(string flight, Rectangle captureArea)
+    public VisionScrollCaptureForm(string flight, Rectangle captureArea, bool autoScrollFallback = false)
     {
-        Text = $"EDITS IA · {flight}";
+        _autoScrollFallback = autoScrollFallback;
+        Text = autoScrollFallback ? $"EDITS IA · {flight} · scroll manual" : $"EDITS IA · {flight}";
         TopMost = true;
         ShowInTaskbar = false;
         FormBorderStyle = FormBorderStyle.FixedToolWindow;
@@ -82,6 +84,7 @@ public sealed class VisionScrollCaptureForm : Form
         _finish.Enabled = !overlaps;
         _state.Text = overlaps ? "Mové esta ventana fuera del recorte para seguir capturando. Podés arrastrarla desde el título."
             : limit ? $"{count} pantallas guardadas. Lote lleno: terminá y revisá. Después podés continuar desde la pantalla pendiente en el mismo vuelo."
-            : $"{count} pantallas guardadas · captura local\nHacé scroll en Sabre y pausá 1 segundo por pantalla. Dejá 2 filas repetidas entre páginas.\nLa IA procesa al terminar, no durante el scroll.";
+            : (_autoScrollFallback ? "El scroll automático no movió Sabre. Continuá MANUALMENTE.\n" : "") +
+              $"{count} pantallas guardadas · captura local\nHacé scroll en Sabre y pausá 1 segundo por pantalla. Dejá 2 filas repetidas entre páginas.\nLa IA procesa al terminar, no durante el scroll.";
     }
 }
