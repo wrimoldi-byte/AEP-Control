@@ -235,6 +235,64 @@ public sealed class CdcBkupReviewForm : Form
     }
 }
 
+/// <summary>
+/// Panel flotante: el agente mueve manualmente la lista de Sabre y la
+/// aplicación lee cada pantalla distinta sin desplazar nada por su cuenta.
+/// </summary>
+public sealed class CdcManualScrollForm : Form
+{
+    private readonly Label _progress = new();
+    public bool Finished { get; private set; }
+    public bool Cancelled { get; private set; }
+
+    public CdcManualScrollForm(Rectangle area)
+    {
+        Text = "CDC EE.UU. · lectura manual";
+        Size = new Size(400, 230);
+        MinimumSize = Size;
+        MaximumSize = Size;
+        TopMost = true;
+        ShowInTaskbar = false;
+        FormBorderStyle = FormBorderStyle.FixedToolWindow;
+        StartPosition = FormStartPosition.Manual;
+        BackColor = Color.FromArgb(22, 47, 79);
+        ForeColor = Color.White;
+        var screen = Screen.FromRectangle(area).WorkingArea;
+        var positions = new[]
+        {
+            new Point(screen.Right - Width, screen.Top),
+            new Point(screen.Left, screen.Top),
+            new Point(screen.Right - Width, screen.Bottom - Height),
+            new Point(screen.Left, screen.Bottom - Height)
+        };
+        Location = positions.FirstOrDefault(p => !new Rectangle(p, Size).IntersectsWith(area), positions[0]);
+
+        _progress.Dock = DockStyle.Fill;
+        _progress.Font = new Font("Segoe UI", 10);
+        _progress.Padding = new Padding(14, 12, 10, 5);
+        _progress.Text = "Pasajeros OCR: 0\nBKUP: 0 · Sin detectar: 0\n\nDesplazá lentamente Sabre, con filas repetidas.\nPausá 1–2 segundos por pantalla.";
+
+        var end = new Button { Text = "Terminar y ver lista", AutoSize = true, Padding = new Padding(6) };
+        end.Click += (_, _) => Finished = true;
+        var cancel = new Button { Text = "Cancelar", AutoSize = true, Padding = new Padding(6) };
+        cancel.Click += (_, _) => Cancelled = true;
+        var controls = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 55, Padding = new Padding(7) };
+        controls.Controls.AddRange(new Control[] { end, cancel });
+        Controls.Add(_progress);
+        Controls.Add(controls);
+        FormClosing += (_, _) => { if (!Finished) Cancelled = true; };
+    }
+
+    public void UpdateProgress(int pages, CdcBkupReader reader)
+    {
+        _progress.Text = $"Pantallas distintas: {pages}\n" +
+            $"PAX identificados: {reader.Passengers.Count}\n" +
+            $"BKUP: {reader.ExactCount} · Dudosos: {reader.PossibleCount}\n" +
+            $"BKUP no detectado: {reader.NotDetectedCount}\n" +
+            "Seguí haciendo scroll lento. Al terminar pulsá «Terminar y ver lista».";
+    }
+}
+
 public sealed partial class BubbleMainForm
 {
     private bool _cdcScanBusy;
@@ -245,19 +303,19 @@ public sealed partial class BubbleMainForm
         if (!FinishTableEditing()) return;
         var flight = GetSelectedFlight()?.Vuelo ?? "Lista EE.UU.";
         if (MessageBox.Show(this,
-            "Primero filtrá EN SABRE todos los pasajeros cuyo itinerario termine o conecte en EE.UU.\n" +
-            "Abrí la lista completa con los nombres y EDITS, y volvé AL PRINCIPIO.\n" +
-            "Seleccioná una zona que incluya cada fila completa (nombres, asientos y EDITS). " +
-            "Se hará scroll con OCR local; se mostrarán TODOS los nombres legibles, con y sin BKUP.\n\n" +
-            "No se transmite información a Gemini. El resultado requiere revisión manual.\n\n¿Comenzar?",
-            "CDC EE.UU. — lista filtrada y BKUP", MessageBoxButtons.YesNo, MessageBoxIcon.Information) != DialogResult.Yes)
+            "Primero filtrá en Sabre todos los pasajeros cuyo itinerario termine o conecte en EE.UU.\n" +
+            "Abrí la lista de pasajeros con NOMBRES y EDITS, volvé al principio y seleccioná toda la zona de las filas.\n\n" +
+            "VOS hacés scroll manualmente. AEP Control leerá mediante OCR local las pantallas que cambien, " +
+            "identificará cada pasajero y buscará BKUP. Pausá 1–2 segundos por pantalla y repetí 2 filas " +
+            "entre movimientos.\n\nBKUP es un indicio, no una confirmación de CDC. ¿Comenzar?",
+            "CDC EE.UU. · lista filtrada", MessageBoxButtons.YesNo, MessageBoxIcon.Information) != DialogResult.Yes)
             return;
 
         _cdcScanBusy = true;
         using var cts = new CancellationTokenSource();
         var reader = new CdcBkupReader();
-        var pagesRead = 0;
-        var incomplete = false;
+        var screensRead = 0;
+        Bitmap? lastScreen = null;
         try
         {
             Hide();
@@ -265,73 +323,65 @@ public sealed partial class BubbleMainForm
             using var selector = new SelectionForm();
             if (selector.ShowDialog() != DialogResult.OK)
             {
-                _status.Text = "Revisión CDC BKUP cancelada.";
+                _status.Text = "CDC: selección cancelada.";
                 return;
             }
 
             var area = selector.SelectedArea;
-            var continueReading = true;
-            var batches = 0;
-            while (continueReading && batches < 20)
+            using var bubble = new CdcManualScrollForm(area);
+            bubble.Show();
+            await Task.Delay(300, cts.Token);
+
+            while (!bubble.Finished && !bubble.Cancelled)
             {
-                batches++;
-                using var pages = new VisionPageBuffer();
-                using (var first = await CaptureStableAreaAsync(area, cts.Token))
-                    pages.Observe(first, captureNow: true);
-                if (pages.Pages.Count == 0)
-                    throw new InvalidOperationException("Recortá una zona más pequeña con filas legibles.");
-
-                if (!await CaptureEditsAutoScrollAsync(area, pages, flight, cts.Token))
+                // Evitar procesar pantallas idénticas, pero retener solapamientos
+                // para que un pasajero leído en dos pantallas no se duplique.
+                using var image = CaptureArea(area);
+                if (lastScreen is null || !FramesAreSimilar(lastScreen, image))
                 {
-                    incomplete = true;
-                    break;
+                    var text = await OcrService.ReadContinuousAsync(image);
+                    reader.AddPage(text, ++screensRead);
+                    lastScreen?.Dispose();
+                    lastScreen = (Bitmap)image.Clone();
+                    if (!bubble.IsDisposed) bubble.UpdateProgress(screensRead, reader);
                 }
-                Show();
-                Activate();
-                for (var i = 0; i < pages.Pages.Count; i++)
-                {
-                    _status.Text = $"CDC: analizando captura {pagesRead + i + 1}…";
-                    var text = await OcrService.ReadContinuousAsync(pages.Pages[i]);
-                    reader.AddPage(text, pagesRead + i + 1);
-                }
-                pagesRead += pages.Pages.Count;
-                incomplete = pages.LimitReached;
-
-                if (!pages.LimitReached) break;
-
-                var choice = MessageBox.Show(this,
-                    $"Se leyeron {reader.Passengers.Count} nombres en {pagesRead} capturas.\n" +
-                    "Hay más lista pendiente (límite del lote). ¿Continuar desde la posición actual de Sabre?",
-                    "CDC EE.UU. · Continuar scroll", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-                if (choice != DialogResult.Yes) break;
-                // El scroll se detuvo antes de avanzar a una página que no cabía.
-                // Se captura esa posición en el primer fotograma del siguiente lote.
-                Hide();
-                await Task.Delay(250, cts.Token);
+                if (!bubble.Finished && !bubble.Cancelled)
+                    await Task.Delay(500, cts.Token);
             }
 
-            if (batches >= 20 && incomplete)
-                _status.Text = "CDC: límite de seguridad alcanzado; revisión parcial.";
-            if (reader.Passengers.Count == 0 && reader.Unassigned.Count == 0)
-                MessageBox.Show(this, "No pude identificar nombres ni EDITS. Revisá que el recorte incluya la lista completa y que Sabre muestre apellidos/nombres.",
-                    "CDC EE.UU.", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-
+            if (bubble.Cancelled)
+            {
+                _status.Text = "CDC: lectura cancelada.";
+                return;
+            }
+            bubble.Close();
             Show();
             Activate();
-            _status.Text = $"CDC: {reader.Passengers.Count} pasajeros OCR; {reader.ExactCount} BKUP; " +
-                $"{reader.NotDetectedCount} sin BKUP detectado; {reader.PossibleCount} dudosos." +
-                (incomplete ? " LECTURA PARCIAL." : " Revisá contra total de Sabre.");
-            using var review = new CdcBkupReviewForm(flight, reader, incomplete, pagesRead);
+            var finishedAtBottom = MessageBox.Show(this,
+                "¿Llegaste al FINAL de la lista filtrada de Sabre?\n" +
+                "Si todavía quedan pasajeros sin recorrer, indicaremos que la revisión es parcial.",
+                "CDC EE.UU. · confirmar cobertura", MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question) == DialogResult.Yes;
+
+            if (reader.Passengers.Count == 0 && reader.Unassigned.Count == 0)
+                MessageBox.Show(this, "No pude reconocer nombres ni BKUP. Revisá el recorte: deben verse los nombres de los pasajeros junto a los EDITS.",
+                    "CDC EE.UU.", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+
+            _status.Text = $"CDC: {reader.Passengers.Count} PAX OCR · BKUP {reader.ExactCount} · " +
+                $"sin detectar {reader.NotDetectedCount} · dudosos {reader.PossibleCount}." +
+                (!finishedAtBottom ? " LECTURA PARCIAL." : " Verificá el total contra Sabre.");
+            using var review = new CdcBkupReviewForm(flight, reader, !finishedAtBottom, screensRead);
             ShowForegroundDialog(review);
         }
-        catch (OperationCanceledException) { _status.Text = "CDC: revisión cancelada; no se modificaron vuelos."; }
+        catch (OperationCanceledException) { _status.Text = "CDC: lectura cancelada."; }
         catch (Exception ex)
         {
             MessageBox.Show(this, ex.Message, "CDC BKUP", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            _status.Text = "CDC: no se pudo completar la lectura.";
+            _status.Text = "CDC: lectura interrumpida.";
         }
         finally
         {
+            lastScreen?.Dispose();
             _cdcScanBusy = false;
             if (!IsDisposed) { Show(); Activate(); }
         }
