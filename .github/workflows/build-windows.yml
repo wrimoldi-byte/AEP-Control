@@ -42,25 +42,25 @@ jobs:
       - name: Compilar ejecutable
         run: dotnet publish AEPControl/AEPControl.csproj --configuration Release --runtime win-x64 --self-contained true --output publish -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 
-      - name: Subir AEP Control v2.32.0 como artifact
+      - name: Subir AEP Control v2.33.0 como artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AEP-Control-v2.32.0-win-x64
+          name: AEP-Control-v2.33.0-win-x64
           path: publish/AEPControl.exe
           if-no-files-found: error
           retention-days: 30
 
-      - name: Crear o actualizar Release v2.32.0
+      - name: Crear o actualizar Release v2.33.0
         if: github.event_name != 'pull_request'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "v2.32.0"
+          $tag = "v2.33.0"
           $asset = "publish/AEPControl.exe"
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.32.0" --notes "Incluye botón CDC EE.UU. · BKUP: OCR local, captura automática con scroll, revisión por pasajero y marcado manual de declaración CDC. El edit BKUP no sustituye la declaración firmada."
+            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.33.0" --notes "CDC EE.UU.: lectura OCR de la lista de pasajeros ya filtrados, scroll manual, lista completa de nombres con BKUP detectado/no detectado/dudoso. Requiere revisión humana de cada declaración CDC."
           } else {
             gh release upload $tag $asset --repo $env:GITHUB_REPOSITORY --clobber
           }
