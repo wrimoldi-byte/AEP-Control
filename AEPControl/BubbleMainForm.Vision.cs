@@ -222,6 +222,7 @@ public sealed partial class BubbleMainForm
         using var previous = CaptureArea(area);
         var previousFrame = (Bitmap)previous.Clone();
         var unchangedAfterScroll = 0;
+        var didScroll = false;
 
         try
         {
@@ -240,15 +241,27 @@ public sealed partial class BubbleMainForm
 
                 // La lista muestra aproximadamente 9 pasajeros. Avanzar como máximo
                 // 6 líneas de Windows deja un margen estimado de 3 filas compartidas.
-                ScrollWindowAt(area, EditsScrollDelta(SystemInformation.MouseWheelScrollLines));
-                using var frame = await CaptureStableAreaAsync(area, token);
+                using var frame = await ScrollAndCaptureAsync(
+                    area, EditsScrollDelta(SystemInformation.MouseWheelScrollLines), previousFrame, token);
                 if (FramesAreSimilar(previousFrame, frame))
                 {
                     unchangedAfterScroll++;
-                    if (unchangedAfterScroll >= 2) return true;
+                    if (unchangedAfterScroll >= 2)
+                    {
+                        // Sin movimiento desde el principio NO equivale a fin de lista:
+                        // Sabre puede ignorar el wheel si el foco quedó en otro control.
+                        // Nunca mandamos a Gemini una única página como lista completa.
+                        if (!didScroll)
+                        {
+                            _visionScrollStatus = $"IA EDITS · {flight}: scroll automático sin respuesta; modo manual.";
+                            return await CaptureEditsManualScrollAsync(area, pages, flight, token);
+                        }
+                        return true;
+                    }
                     continue;
                 }
 
+                didScroll = true;
                 unchangedAfterScroll = 0;
                 pages.Observe(frame, captureNow: true);
                 // Incluye el límite de bytes/píxeles: no seguir moviendo Sabre si
@@ -279,18 +292,92 @@ public sealed partial class BubbleMainForm
         return -120 * (targetLines / linesPerNotch);
     }
 
-    private static void ScrollWindowAt(Rectangle area, int delta)
+    private static async Task<Bitmap> ScrollAndCaptureAsync(
+        Rectangle area, int delta, Bitmap previous, CancellationToken token)
     {
         var point = new POINT(area.Left + area.Width / 2, area.Top + area.Height / 2);
         Cursor.Position = new Point(point.X, point.Y);
-
         var child = WindowFromPoint(point);
-        var target = child == IntPtr.Zero ? IntPtr.Zero : GetAncestor(child, 2); // GA_ROOT
-        if (target != IntPtr.Zero) SetForegroundWindow(target);
+        var root = child == IntPtr.Zero ? IntPtr.Zero : GetAncestor(child, 2); // GA_ROOT
 
-        // El wheel se envía en la misma posición de la lista para que Sabre desplace
-        // exactamente el control que el usuario seleccionó.
-        mouse_event(0x0800, 0, 0, delta, UIntPtr.Zero); // MOUSEEVENTF_WHEEL
+        // El wheel tradicional puede llegar a la ventana enfocada y no a Sabre.
+        // Primero enfocamos la ventana real debajo del recorte, y usamos SendInput.
+        if (root != IntPtr.Zero) SetForegroundWindow(root);
+        await Task.Delay(150, token);
+        if (child != IntPtr.Zero) SendWheelInput(delta);
+        var frame = await CaptureStableAreaAsync(area, token);
+        if (!FramesAreSimilar(previous, frame) || child == IntPtr.Zero) return frame;
+        frame.Dispose();
+
+        // Si la ventana ignora el input simulado, dirigimos el WM_MOUSEWHEEL
+        // al control debajo del cursor. Sólo se prueba si NO hubo movimiento,
+        // para evitar avanzar dos veces y saltear pasajeros.
+        PostWheel(child, point, delta);
+        frame = await CaptureStableAreaAsync(area, token);
+        if (!FramesAreSimilar(previous, frame) || root == child || root == IntPtr.Zero) return frame;
+        frame.Dispose();
+
+        PostWheel(root, point, delta);
+        return await CaptureStableAreaAsync(area, token);
+    }
+
+    private static void SendWheelInput(int delta)
+    {
+        var input = new INPUT
+        {
+            Type = 0, // INPUT_MOUSE
+            Data = new INPUTUNION
+            {
+                Mouse = new MOUSEINPUT { MouseData = unchecked((uint)delta), Flags = 0x0800 } // MOUSEEVENTF_WHEEL
+            }
+        };
+        SendInput(1, new[] { input }, Marshal.SizeOf<INPUT>());
+    }
+
+    private static void PostWheel(IntPtr window, POINT point, int delta)
+    {
+        // WM_MOUSEWHEEL: delta en la palabra alta, coordenadas en pantalla.
+        var wParam = new IntPtr(unchecked((int)((ushort)delta << 16)));
+        var lParam = new IntPtr(unchecked((point.Y & 0xffff) << 16 | (point.X & 0xffff)));
+        PostMessage(window, 0x020A, wParam, lParam);
+    }
+
+    private static async Task<bool> CaptureEditsManualScrollAsync(
+        Rectangle area, VisionPageBuffer pages, string flight, CancellationToken token)
+    {
+        // Último recurso cuando Sabre no acepta ninguna de las formas de wheel:
+        // la persona desplaza y confirmamos cada pantalla antes de enviarla.
+        using var popup = new VisionScrollCaptureForm(flight, area, autoScrollFallback: true);
+        popup.Show();
+        using var initial = (Bitmap)pages.Pages[^1].Clone();
+        Bitmap previous = (Bitmap)initial.Clone();
+        try
+        {
+            while (!popup.IsDisposed)
+            {
+                token.ThrowIfCancellationRequested();
+                if ((GetAsyncKeyState((int)Keys.Escape) & 0x8000) != 0 || popup.Cancelled) return false;
+                var overlaps = popup.Bounds.IntersectsWith(area);
+                popup.UpdateState(pages.Pages.Count, pages.LimitReached, overlaps);
+                if (popup.Finished || pages.LimitReached) return true;
+                await Task.Delay(450, token);
+                if (overlaps) continue;
+                using var frame = await CaptureStableAreaAsync(area, token);
+                if (!FramesAreSimilar(previous, frame) || popup.CaptureRequested)
+                {
+                    popup.CaptureRequested = false;
+                    pages.Observe(frame, captureNow: true);
+                    previous.Dispose();
+                    previous = (Bitmap)frame.Clone();
+                }
+            }
+            return false;
+        }
+        finally
+        {
+            previous.Dispose();
+            if (!popup.IsDisposed) popup.Close();
+        }
     }
 
     private static async Task<Bitmap> CaptureStableAreaAsync(Rectangle area, CancellationToken token)
@@ -360,11 +447,39 @@ public sealed partial class BubbleMainForm
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hwnd);
 
-    [DllImport("user32.dll")]
-    private static extern short GetAsyncKeyState(int vKey);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct INPUT
+    {
+        public uint Type;
+        public INPUTUNION Data;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    private struct INPUTUNION
+    {
+        [FieldOffset(0)] public MOUSEINPUT Mouse;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MOUSEINPUT
+    {
+        public int Dx;
+        public int Dy;
+        public uint MouseData;
+        public uint Flags;
+        public uint Time;
+        public UIntPtr ExtraInfo;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint count, [In] INPUT[] inputs, int size);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll")]
-    private static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extraInfo);
+    private static extern short GetAsyncKeyState(int vKey);
 
     private static string Summary(VisionResult result, string kind, string context)
     {
