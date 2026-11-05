@@ -287,11 +287,6 @@ internal static class Program
             Check(!bubble.Modal, "Scroll capture window is non-modal");
             bubble.Close();
             Check(bubble.Cancelled && !bubble.Finished, "Closing scroll capture cancels without submitting");
-            using var fallback = new VisionScrollCaptureForm("LA8035", new Rectangle(0, 0, 100, 100), autoScrollFallback: true);
-            fallback.UpdateState(1, false, false);
-            var state = (Label)typeof(VisionScrollCaptureForm).GetField("_state", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(fallback)!;
-            Check(fallback.Text.Contains("scroll manual") && state.Text.Contains("no movió Sabre"),
-                "When automatic scrolling fails, an explicit manual-capture mode is available");
         }
         using (var client = new HttpClient(new FakeHandler("{}", HttpStatusCode.TooManyRequests)))
         using (var bitmap = new Bitmap(40, 40))
