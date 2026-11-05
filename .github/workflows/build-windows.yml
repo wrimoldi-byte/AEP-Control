@@ -60,7 +60,7 @@ jobs:
           $asset = "publish/AEPControl.exe"
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.33.1" --notes "Corrige scroll automático de EDITS con Gemini: rueda nativa + envío dirigido si Sabre no responde. Si no se mueve, ofrece captura manual asistida antes de consultar a Gemini. Mantiene CDC con scroll manual."
+            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.33.1" --notes "Corrige scroll automático de EDITS con Gemini: rueda nativa, entrega dirigida y soporte para rueda Windows 1-6 líneas. Si Sabre no se mueve, ofrece captura manual asistida. CDC conserva scroll manual."
           } else {
             gh release upload $tag $asset --repo $env:GITHUB_REPOSITORY --clobber
           }
