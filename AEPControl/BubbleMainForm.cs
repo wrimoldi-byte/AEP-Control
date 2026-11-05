@@ -80,6 +80,9 @@ public sealed partial class BubbleMainForm : Form
         var readDocuments = new Button { Text = "Leer documentación de PAX", AutoSize = true, Padding = new Padding(10, 7, 10, 7) };
         readDocuments.Click += async (_, _) => await ReadPassengerDocumentsAsync();
 
+        var cdcBkup = new Button { Text = "CDC EE.UU. · BKUP", AutoSize = true, Padding = new Padding(10, 7, 10, 7) };
+        cdcBkup.Click += async (_, _) => await ScanCdcBkupAsync();
+
         var configuration = new Button { Text = "Configuración", AutoSize = true, Padding = new Padding(10, 7, 10, 7) };
         configuration.Click += (_, _) => OpenConfiguration();
 
@@ -87,7 +90,7 @@ public sealed partial class BubbleMainForm : Form
         _status.Padding = new Padding(12, 11, 0, 0);
 
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 96, Padding = new Padding(12, 8, 12, 4), AutoScroll = true, WrapContents = true, BackColor = Color.FromArgb(232, 243, 249) };
-        bar.Controls.AddRange(new Control[] { _readArrivals, _readDepartures, _readDepartureOperation, _action, readDocuments, _export, configuration, reset, _status });
+        bar.Controls.AddRange(new Control[] { _readArrivals, _readDepartures, _readDepartureOperation, _action, readDocuments, cdcBkup, _export, configuration, reset, _status });
         StyleToolbar(bar, reset);
         _readDepartureOperation.BackColor = Color.FromArgb(137, 37, 103);
 
