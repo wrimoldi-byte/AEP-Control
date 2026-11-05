@@ -36,7 +36,7 @@ jobs:
       - name: Restaurar dependencias
         run: dotnet restore AEPControl/AEPControl.csproj
 
-      - name: Verificar IA, edición y Excel
+      - name: Verificar IA, scroll y Excel
         run: dotnet run --project Tests/Tests.csproj --configuration Release
 
       - name: Compilar ejecutable
