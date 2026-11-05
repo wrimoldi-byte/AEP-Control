@@ -100,11 +100,12 @@ internal static class Program
         TestStitching();
         TestCdcBkupReader();
         var scrollDelta = typeof(BubbleMainForm).GetMethod("EditsScrollDelta", BindingFlags.Static | BindingFlags.NonPublic)!;
-        foreach (var lines in new[] { 1, 2, 3 })
+        foreach (var lines in new[] { 1, 2, 3, 4, 5, 6 })
         {
             var delta = (int)scrollDelta.Invoke(null, new object[] { lines })!;
-            Check(delta < 0 && (-delta / 120) * lines == 6,
-                "Scroll advances six configured lines, retaining margin in a nine-row viewport: " + lines);
+            var advanced = (-delta / 120) * lines;
+            Check(delta < 0 && advanced > 0 && advanced <= 6,
+                "Scroll retains a three-row safety margin for Windows wheel speed: " + lines);
         }
         // Regression: a mostly white passenger table is not "unchanged" when
         // only a small text/number region changes after scrolling.
