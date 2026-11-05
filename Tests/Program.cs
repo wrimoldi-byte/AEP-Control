@@ -70,10 +70,35 @@ internal static class Program
         Throws(() => VisionPageStitcher.Build(new[] { first }, cancelled.Token), "Stitching honors cancellation");
     }
 
+    private static void TestCdcBkupReader()
+    {
+        var reader = new CdcBkupReader();
+        reader.AddPage("01 LOPEZ/MARIA 4A BKUP\n02 PEREZ/JUAN WCHR\n03 DIAZ/ANA BKUP", 1);
+        reader.AddPage("03 DIAZ/ANA BKUP\n04 RIOS/ELENA 8KUP", 2);
+        Check(reader.Findings.Count == 3 && reader.ExactCount == 2 && reader.PossibleCount == 1,
+            "CDC: duplicate passenger from overlapping scroll is counted once and doubtful OCR is flagged");
+        Check(reader.Findings.Any(f => f.Passenger == "LOPEZ/MARIA" && f.Exact),
+            "CDC: BKUP links to passenger only when name appears in same OCR line");
+        var differentRows = new CdcBkupReader();
+        differentRows.AddPage("GOMEZ/PABLO\nBKUP\nROJAS/LUIS\nWCHC", 1);
+        Check(differentRows.Findings.Count == 1 && differentRows.UnidentifiedCount == 1,
+            "CDC: never guess a passenger name from adjacent OCR lines");
+        var upgraded = new CdcBkupReader();
+        upgraded.AddPage("RUIZ/INES 8KUP", 1);
+        upgraded.AddPage("RUIZ/INES BKUP", 2);
+        Check(upgraded.Findings.Count == 1 && upgraded.ExactCount == 1,
+            "CDC: exact BKUP replaces prior uncertain reading for same identified passenger");
+        var empty = new CdcBkupReader();
+        empty.AddPage("ROSA/PEDRO WCHR\nNONE BK-UP\nPARDO/CLARA", 1);
+        Check(empty.Findings.Count == 0,
+            "CDC: unrelated EDITS and broken tokens do not create confirmed CDC matches");
+    }
+
     [STAThread]
     private static void Main()
     {
         TestStitching();
+        TestCdcBkupReader();
         var scrollDelta = typeof(BubbleMainForm).GetMethod("EditsScrollDelta", BindingFlags.Static | BindingFlags.NonPublic)!;
         foreach (var lines in new[] { 1, 2, 3 })
         {
