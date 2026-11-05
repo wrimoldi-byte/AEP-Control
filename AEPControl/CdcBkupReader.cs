@@ -4,58 +4,112 @@ using System.Text.RegularExpressions;
 namespace AEPControl;
 
 /// <summary>
-/// Lee solamente indicios de EDIT BKUP desde el texto OCR de una lista de Sabre.
-/// No verifica firmas ni certificados del CDC. Sin una lista completa de viajeros a
-/// EE.UU. no es posible determinar quien carece de declaración.
+/// Lee la lista completa de pasajeros filtrados previamente en Sabre por
+/// itinerario a EE.UU. y busca el EDIT BKUP en cada fila.
+/// El OCR no valida una declaración CDC ni prueba que un EDIT esté ausente.
 /// </summary>
 public sealed class CdcBkupReader
 {
     private static readonly Regex ExactBkup = new(@"\bB\s*K\s*U\s*P\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex PossibleBkup = new(@"\b8\s*K\s*U\s*P\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex Name = new(@"\b(?<last>[A-Z]{2,})\s*/\s*(?<first>[A-Z]{2,})\b",
+    private static readonly Regex SlashName = new(@"\b(?<last>[A-ZÀ-Ü]{2,})\s*/\s*(?<first>[A-ZÀ-Ü]{2,})\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private readonly List<CdcBkupFinding> _findings = new();
-    private readonly HashSet<string> _seenNamed = new(StringComparer.OrdinalIgnoreCase);
-    public IReadOnlyList<CdcBkupFinding> Findings => _findings;
-    public int ExactCount => _findings.Count(x => x.Exact);
-    public int PossibleCount => _findings.Count(x => !x.Exact);
-    public int UnidentifiedCount => _findings.Count(x => x.Passenger.Length == 0);
+    private static readonly Regex NumberedName = new(
+        @"^\s*(?:\d{1,3}\s*[.)-]?\s+)(?<last>[A-ZÀ-Ü]{3,})\s+(?<first>[A-ZÀ-Ü]{3,})(?:\s+(?<middle>[A-ZÀ-Ü]{3,}))?\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex Seat = new(@"\b(?<seat>\d{1,2}[A-K])\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly HashSet<string> NotNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "SSR", "EDIT", "EDITS", "PAX", "DOCS", "PASSENGER", "SEAT", "ASIENTO", "BKUP",
+        "WCHR", "WCHC", "WCHS", "AVIH", "SABRE", "HK", "NO", "YES", "STATUS",
+        "NOMBRE", "APELLIDO", "PASAJERO", "NACIONALIDAD", "DESTINO", "USA"
+    };
+
+    private readonly List<CdcPassengerEntry> _passengers = new();
+    private readonly List<CdcBkupFinding> _unassigned = new();
+    private readonly HashSet<string> _unassignedKeys = new(StringComparer.OrdinalIgnoreCase);
+
+    public IReadOnlyList<CdcPassengerEntry> Passengers => _passengers;
+    public IReadOnlyList<CdcBkupFinding> Unassigned => _unassigned;
+    public int ExactCount => _passengers.Count(p => p.Status == CdcBkupStatus.Detected);
+    public int PossibleCount => _passengers.Count(p => p.Status == CdcBkupStatus.Uncertain);
+    public int NotDetectedCount => _passengers.Count(p => p.Status == CdcBkupStatus.NotDetected);
 
     public void AddPage(string ocrText, int pageNumber)
     {
         if (string.IsNullOrWhiteSpace(ocrText)) return;
         var lines = ocrText.ToUpperInvariant().Replace('\r', '\n')
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
-        {
-            var line = Regex.Replace(lines[lineIndex], @"\s+", " ").Trim();
-            var exact = ExactBkup.IsMatch(line);
-            if (!exact && !PossibleBkup.IsMatch(line)) continue;
 
-            // Usar el nombre solo cuando OCR lo encontró en LA MISMA FILA.
-            // Si está en otra fila, no adivinar a qué pasajero pertenece el edit.
-            var match = Name.Match(line);
-            var passenger = match.Success
-                ? match.Groups["last"].Value + "/" + match.Groups["first"].Value
-                : "";
-            if (passenger.Length > 0 && !_seenNamed.Add(passenger))
+        foreach (var raw in lines)
+        {
+            var line = Regex.Replace(raw, @"\s+", " ").Trim();
+            var exact = ExactBkup.IsMatch(line);
+            var uncertain = !exact && PossibleBkup.IsMatch(line);
+            var name = SlashName.Match(line);
+            var numbered = !name.Success ? NumberedName.Match(line) : Match.Empty;
+            var matchedName = name.Success ? name : numbered;
+            if (!matchedName.Success || NotNames.Contains(matchedName.Groups["last"].Value) ||
+                NotNames.Contains(matchedName.Groups["first"].Value))
             {
-                // Si una pasada posterior sí leyó "BKUP" inequívocamente,
-                // actualizar una detección OCR dudosa previa del mismo pasajero.
-                if (exact)
+                if (exact || uncertain)
                 {
-                    var index = _findings.FindIndex(f => f.Passenger == passenger && !f.Exact);
-                    if (index >= 0)
-                        _findings[index] = new CdcBkupFinding(passenger, line, pageNumber, true);
+                    // Un EDIT no se asigna a la persona de la línea anterior.
+                    // No eliminar estos casos: podrían ser pasajeros distintos.
+                    var key = pageNumber + ":" + line;
+                    if (_unassignedKeys.Add(key))
+                        _unassigned.Add(new CdcBkupFinding("", line, pageNumber, exact));
                 }
                 continue;
             }
 
-            // Sin identidad NO deduplicamos por texto BKUP: podrían ser varias
-            // personas con un OCR igual. Se muestran para revisión, sin afirmar
-            // que el número de coincidencias sea un total de pasajeros únicos.
-            _findings.Add(new CdcBkupFinding(passenger, line, pageNumber, exact));
+            var passenger = matchedName.Groups["last"].Value + "/" + matchedName.Groups["first"].Value;
+            var seatMatch = Seat.Match(line);
+            var seat = seatMatch.Success ? seatMatch.Groups["seat"].Value : "";
+            var status = exact ? CdcBkupStatus.Detected
+                : uncertain ? CdcBkupStatus.Uncertain : CdcBkupStatus.NotDetected;
+
+            var existing = _passengers.FirstOrDefault(p =>
+                p.Passenger == passenger && (p.Seat == seat || p.Seat.Length == 0 || seat.Length == 0));
+            if (existing is null)
+            {
+                _passengers.Add(new CdcPassengerEntry(passenger, seat, pageNumber, line, status));
+                continue;
+            }
+
+            if (existing.Seat.Length == 0 && seat.Length != 0) existing.Seat = seat;
+            if (status > existing.Status)
+            {
+                existing.Status = status;
+                existing.Evidence = line;
+                existing.Page = pageNumber;
+            }
         }
+    }
+}
+
+public enum CdcBkupStatus
+{
+    NotDetected = 0,
+    Uncertain = 1,
+    Detected = 2
+}
+
+public sealed class CdcPassengerEntry
+{
+    public string Passenger { get; }
+    public string Seat { get; set; }
+    public int Page { get; set; }
+    public string Evidence { get; set; }
+    public CdcBkupStatus Status { get; set; }
+
+    public CdcPassengerEntry(string passenger, string seat, int page, string evidence, CdcBkupStatus status)
+    {
+        Passenger = passenger;
+        Seat = seat;
+        Page = page;
+        Evidence = evidence;
+        Status = status;
     }
 }
 
@@ -68,24 +122,24 @@ public sealed class CdcBkupReviewForm : Form
 
     public CdcBkupReviewForm(string flight, CdcBkupReader reader, bool incomplete, int pages)
     {
-        Text = "CDC EE.UU. — revisión de BKUP" + (flight.Length == 0 ? "" : " · " + flight);
-        MinimumSize = new Size(750, 480);
-        Size = new Size(1000, 610);
+        Text = "CDC EE.UU. — pasajeros filtrados · BKUP" + (flight.Length == 0 ? "" : " · " + flight);
+        MinimumSize = new Size(780, 500);
+        Size = new Size(1120, 670);
         StartPosition = FormStartPosition.CenterParent;
         BackColor = Color.FromArgb(235, 245, 250);
 
         var intro = new Label
         {
             Dock = DockStyle.Top,
-            Height = 104,
-            Padding = new Padding(12, 11, 12, 5),
+            Height = 122,
+            Padding = new Padding(12, 10, 12, 5),
             Font = new Font("Segoe UI", 10),
-            Text = "Se buscaron EDITS BKUP en " + pages + " pantallas de Sabre (" + flight + ").\n" +
-                "BKUP es un indicio operativo, NO una aprobación del CDC. Confirmá por separado la declaración firmada de cada pasajero con destino o conexión en EE.UU.\n" +
-                "Los pasajeros sin BKUP no pueden identificarse usando únicamente la lista de EDITS." +
-                (incomplete ? "\nATENCIÓN: lote parcial. Continuá desde donde quedó Sabre para cubrir el resto." : "")
+            Text = $"Lista prefiltrada en Sabre por destino/conexión en EE.UU. · {pages} pantallas.\n" +
+                "Se listan todos los nombres reconocidos por OCR, tengan BKUP o no. «No detectado» exige revisión: el OCR puede omitir EDITS y no demuestra ausencia.\n" +
+                "BKUP tampoco acredita la declaración del CDC; verificá cada declaración según el procedimiento operativo.\n" +
+                (incomplete ? "ATENCIÓN: recorrido PARCIAL; faltan pantallas o se interrumpió la captura." :
+                "Comprobá que el número de pasajeros reconocidos coincida con el filtro de Sabre.")
         };
-        if (incomplete) intro.Height = 127;
 
         _grid.Dock = DockStyle.Fill;
         _grid.AllowUserToAddRows = false;
@@ -94,22 +148,35 @@ public sealed class CdcBkupReviewForm : Form
         _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
         _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         _grid.BackgroundColor = Color.White;
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Passenger", HeaderText = "Pasajero (OCR)", FillWeight = 30, ReadOnly = true });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "State", HeaderText = "EDIT", FillWeight = 22, ReadOnly = true });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Passenger", HeaderText = "Pasajero (OCR)", FillWeight = 33, ReadOnly = true });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Seat", HeaderText = "Asiento", FillWeight = 12, ReadOnly = true });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "State", HeaderText = "EDIT BKUP", FillWeight = 25, ReadOnly = true });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Page", HeaderText = "Pantalla", FillWeight = 12, ReadOnly = true });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Evidence", HeaderText = "Texto OCR para revisar", FillWeight = 70, ReadOnly = true });
-        _grid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Reviewed", HeaderText = "Declaración CDC revisada", FillWeight = 25 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Evidence", HeaderText = "Texto OCR para cotejar", FillWeight = 65, ReadOnly = true });
+        _grid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Reviewed", HeaderText = "Declaración CDC revisada", FillWeight = 22 });
 
-        foreach (var finding in reader.Findings)
+        foreach (var entry in reader.Passengers.OrderBy(p => p.Status).ThenBy(p => p.Passenger))
+        {
+            var state = entry.Status switch
+            {
+                CdcBkupStatus.Detected => "BKUP detectado",
+                CdcBkupStatus.Uncertain => "Posible BKUP — revisar",
+                _ => "BKUP no detectado — revisar"
+            };
+            var row = _grid.Rows[_grid.Rows.Add(entry.Passenger, entry.Seat, state, entry.Page, entry.Evidence, false)];
+            if (entry.Status == CdcBkupStatus.NotDetected)
+                row.DefaultCellStyle.BackColor = Color.FromArgb(255, 224, 224);
+            else if (entry.Status == CdcBkupStatus.Uncertain)
+                row.DefaultCellStyle.BackColor = Color.FromArgb(255, 248, 220);
+        }
+
+        foreach (var unknown in reader.Unassigned)
         {
             var row = _grid.Rows[_grid.Rows.Add(
-                finding.Passenger.Length == 0 ? "Sin identidad — revisar" : finding.Passenger,
-                finding.Exact ? "BKUP detectado" : "Posible BKUP (8KUP)",
-                finding.Page,
-                finding.OcrEvidence,
-                false)];
-            if (!finding.Exact || finding.Passenger.Length == 0)
-                row.DefaultCellStyle.BackColor = Color.FromArgb(255, 248, 220);
+                "IDENTIDAD NO LEGIBLE — REVISAR", "",
+                unknown.Exact ? "BKUP sin identidad" : "Posible BKUP sin identidad",
+                unknown.Page, unknown.OcrEvidence, false)];
+            row.DefaultCellStyle.BackColor = Color.FromArgb(255, 248, 220);
         }
 
         _grid.CurrentCellDirtyStateChanged += (_, _) =>
@@ -120,24 +187,26 @@ public sealed class CdcBkupReviewForm : Form
 
         _counter.Dock = DockStyle.Fill;
         _counter.Font = new Font("Segoe UI", 9, FontStyle.Bold);
-        _counter.Padding = new Padding(12, 10, 0, 0);
+        _counter.Padding = new Padding(10, 10, 0, 0);
 
         var copy = new Button { Text = "Copiar reporte", AutoSize = true };
         copy.Click += (_, _) =>
         {
             var report = new StringBuilder();
-            report.AppendLine("CDC EE.UU. - BKUP - " + flight);
-            report.AppendLine("Pantallas capturadas: " + pages + (incomplete ? " (LOTE PARCIAL)" : ""));
-            report.AppendLine("BKUP es indicio de edit. No verifica declaración firmada.");
+            report.AppendLine("CDC EE.UU. - revisión BKUP - " + flight);
+            report.AppendLine("Pantallas: " + pages + (incomplete ? " (INCOMPLETO)" : ""));
+            report.AppendLine($"PAX reconocidos: {reader.Passengers.Count}; BKUP detectado: {reader.ExactCount}; posible: {reader.PossibleCount}; no detectado: {reader.NotDetectedCount}; EDIT sin identidad: {reader.Unassigned.Count}");
+            report.AppendLine("BKUP es un indicio del EDIT; el OCR no verifica la declaración CDC.");
             foreach (DataGridViewRow row in _grid.Rows)
-                report.AppendLine(row.Cells["Passenger"].Value + " | " + row.Cells["State"].Value +
-                    " | pantalla " + row.Cells["Page"].Value + " | CDC revisado manualmente: " +
-                    (row.Cells["Reviewed"].Value is true ? "SI" : "NO") + " | " + row.Cells["Evidence"].Value);
+                report.AppendLine(row.Cells["Passenger"].Value + " | " + row.Cells["Seat"].Value + " | " +
+                    row.Cells["State"].Value + " | pantalla " + row.Cells["Page"].Value +
+                    " | CDC revisado manualmente: " +
+                    (row.Cells["Reviewed"].Value is true ? "SI" : "NO"));
             Clipboard.SetText(report.ToString());
         };
         var close = new Button { Text = "Cerrar", AutoSize = true };
         close.Click += (_, _) => Close();
-        var bottom = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 56, ColumnCount = 3, Padding = new Padding(8) };
+        var bottom = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 65, ColumnCount = 3, Padding = new Padding(8) };
         bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -154,8 +223,9 @@ public sealed class CdcBkupReviewForm : Form
     private void UpdateCounter()
     {
         var checkedRows = _grid.Rows.Cast<DataGridViewRow>().Count(r => r.Cells["Reviewed"].Value is true);
-        _counter.Text = "Coincidencias OCR: " + _grid.Rows.Count + " · revisadas manualmente: " + checkedRows +
-            " (no equivale a total de PAX)";
+        _counter.Text = "PAX identificados: " + _grid.Rows.Cast<DataGridViewRow>().Count(r =>
+            r.Cells["Passenger"].Value?.ToString() != "IDENTIDAD NO LEGIBLE — REVISAR") +
+            " · Declaraciones marcadas: " + checkedRows;
     }
 }
 
@@ -167,65 +237,92 @@ public sealed partial class BubbleMainForm
     {
         if (_cdcScanBusy || _visionBusy) return;
         if (!FinishTableEditing()) return;
-
-        var flight = GetSelectedFlight()?.Vuelo ?? "Vuelo no seleccionado";
+        var flight = GetSelectedFlight()?.Vuelo ?? "Lista EE.UU.";
         if (MessageBox.Show(this,
-            "Abrí en Sabre la lista de EDITS de los pasajeros que viajan o conectan a Estados Unidos.\n" +
-            "Colocá la lista AL PRINCIPIO. Vas a seleccionar el área con nombres y EDITS; " +
-            "AEP Control hará scroll y buscará BKUP mediante OCR local.\n\n" +
-            "La captura no confirma la declaración del CDC y puede requerir varios lotes de hasta 12 pantallas.\n\n¿Comenzar?",
-            "Revisión CDC EE.UU. · BKUP", MessageBoxButtons.YesNo, MessageBoxIcon.Information) != DialogResult.Yes)
+            "Primero filtrá EN SABRE todos los pasajeros cuyo itinerario termine o conecte en EE.UU.\n" +
+            "Abrí la lista completa con los nombres y EDITS, y volvé AL PRINCIPIO.\n" +
+            "Seleccioná una zona que incluya cada fila completa (nombres, asientos y EDITS). " +
+            "Se hará scroll con OCR local; se mostrarán TODOS los nombres legibles, con y sin BKUP.\n\n" +
+            "No se transmite información a Gemini. El resultado requiere revisión manual.\n\n¿Comenzar?",
+            "CDC EE.UU. — lista filtrada y BKUP", MessageBoxButtons.YesNo, MessageBoxIcon.Information) != DialogResult.Yes)
             return;
 
         _cdcScanBusy = true;
-        using var tokenSource = new CancellationTokenSource();
-        using var pages = new VisionPageBuffer();
-        var token = tokenSource.Token;
+        using var cts = new CancellationTokenSource();
+        var reader = new CdcBkupReader();
+        var pagesRead = 0;
+        var incomplete = false;
         try
         {
             Hide();
-            await Task.Delay(250, token);
+            await Task.Delay(250, cts.Token);
             using var selector = new SelectionForm();
             if (selector.ShowDialog() != DialogResult.OK)
             {
-                _status.Text = "Búsqueda CDC BKUP cancelada.";
+                _status.Text = "Revisión CDC BKUP cancelada.";
                 return;
             }
 
-            using (var first = await CaptureStableAreaAsync(selector.SelectedArea, token))
-                pages.Observe(first, captureNow: true);
-            if (pages.Pages.Count == 0)
-                throw new InvalidOperationException("El área seleccionada es demasiado grande. Recortá solo la lista de EDITS.");
-            if (!await CaptureEditsAutoScrollAsync(selector.SelectedArea, pages, flight, token))
+            var area = selector.SelectedArea;
+            var continueReading = true;
+            var batches = 0;
+            while (continueReading && batches < 20)
             {
-                _status.Text = "Búsqueda CDC BKUP cancelada con Esc.";
-                return;
+                batches++;
+                using var pages = new VisionPageBuffer();
+                using (var first = await CaptureStableAreaAsync(area, cts.Token))
+                    pages.Observe(first, captureNow: true);
+                if (pages.Pages.Count == 0)
+                    throw new InvalidOperationException("Recortá una zona más pequeña con filas legibles.");
+
+                if (!await CaptureEditsAutoScrollAsync(area, pages, flight, cts.Token))
+                {
+                    incomplete = true;
+                    break;
+                }
+                Show();
+                Activate();
+                for (var i = 0; i < pages.Pages.Count; i++)
+                {
+                    _status.Text = $"CDC: analizando captura {pagesRead + i + 1}…";
+                    var text = await OcrService.ReadContinuousAsync(pages.Pages[i]);
+                    reader.AddPage(text, pagesRead + i + 1);
+                }
+                pagesRead += pages.Pages.Count;
+                incomplete = pages.LimitReached;
+
+                if (!pages.LimitReached) break;
+
+                var choice = MessageBox.Show(this,
+                    $"Se leyeron {reader.Passengers.Count} nombres en {pagesRead} capturas.\n" +
+                    "Hay más lista pendiente (límite del lote). ¿Continuar desde la posición actual de Sabre?",
+                    "CDC EE.UU. · Continuar scroll", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (choice != DialogResult.Yes) break;
+                // El scroll se detuvo antes de avanzar a una página que no cabía.
+                // Se captura esa posición en el primer fotograma del siguiente lote.
+                Hide();
+                await Task.Delay(250, cts.Token);
             }
+
+            if (batches >= 20 && incomplete)
+                _status.Text = "CDC: límite de seguridad alcanzado; revisión parcial.";
+            if (reader.Passengers.Count == 0 && reader.Unassigned.Count == 0)
+                MessageBox.Show(this, "No pude identificar nombres ni EDITS. Revisá que el recorte incluya la lista completa y que Sabre muestre apellidos/nombres.",
+                    "CDC EE.UU.", MessageBoxButtons.OK, MessageBoxIcon.Warning);
 
             Show();
             Activate();
-            _status.Text = "Leyendo BKUP por OCR local en " + pages.Pages.Count + " capturas…";
-            var reader = new CdcBkupReader();
-            for (var i = 0; i < pages.Pages.Count; i++)
-            {
-                token.ThrowIfCancellationRequested();
-                _status.Text = "CDC BKUP: analizando pantalla " + (i + 1) + "/" + pages.Pages.Count + "…";
-                var text = await OcrService.ReadContinuousAsync(pages.Pages[i]);
-                reader.AddPage(text, i + 1);
-            }
-            _status.Text = "CDC BKUP: " + reader.ExactCount + " coincidencias exactas, " +
-                reader.PossibleCount + " dudosas." + (pages.LimitReached ? " Lectura parcial." : "");
-            using var review = new CdcBkupReviewForm(flight, reader, pages.LimitReached, pages.Pages.Count);
+            _status.Text = $"CDC: {reader.Passengers.Count} pasajeros OCR; {reader.ExactCount} BKUP; " +
+                $"{reader.NotDetectedCount} sin BKUP detectado; {reader.PossibleCount} dudosos." +
+                (incomplete ? " LECTURA PARCIAL." : " Revisá contra total de Sabre.");
+            using var review = new CdcBkupReviewForm(flight, reader, incomplete, pagesRead);
             ShowForegroundDialog(review);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) { _status.Text = "CDC: revisión cancelada; no se modificaron vuelos."; }
+        catch (Exception ex)
         {
-            _status.Text = "Búsqueda CDC BKUP cancelada; no se modificaron datos.";
-        }
-        catch (Exception exception)
-        {
-            MessageBox.Show(this, exception.Message, "CDC BKUP", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            _status.Text = "Búsqueda CDC BKUP no completada.";
+            MessageBox.Show(this, ex.Message, "CDC BKUP", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _status.Text = "CDC: no se pudo completar la lectura.";
         }
         finally
         {
