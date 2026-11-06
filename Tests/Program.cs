@@ -126,11 +126,63 @@ internal static class Program
             "CDC: unrelated EDITS and broken tokens do not create confirmed CDC matches");
     }
 
+    private static void TestCdcBkupSabreLayout()
+    {
+        // Windows OCR can emit separate blocks for name, seat and EDITS.
+        // Word positions must restore each on-screen Sabre row without
+        // attributing BKUP to passengers above or below the visual line.
+        var words = new[]
+        {
+            new CdcOcrWord("BKUP", 840, 100, 50, 18),
+            new CdcOcrWord("LUCIA", 245, 102, 68, 18),
+            new CdcOcrWord("23J", 592, 101, 37, 18),
+            new CdcOcrWord("NAVARRO", 65, 101, 70, 18),
+            new CdcOcrWord("1", 35, 101, 12, 18),
+
+            new CdcOcrWord("RAMIRO", 245, 169, 120, 18),
+            new CdcOcrWord("SILVA", 65, 170, 95, 18),
+            new CdcOcrWord("28H", 592, 169, 37, 18),
+            new CdcOcrWord("3", 35, 170, 12, 18),
+            new CdcOcrWord("ETI", 838, 171, 35, 18),
+
+            new CdcOcrWord("BKUP", 840, 240, 50, 18),
+            new CdcOcrWord("MARCOS", 245, 241, 94, 18),
+            new CdcOcrWord("TORRES", 65, 241, 77, 18),
+            new CdcOcrWord("26L", 592, 241, 37, 18),
+            new CdcOcrWord("9", 35, 241, 12, 18),
+
+            new CdcOcrWord("BKUP", 840, 310, 50, 18),
+            new CdcOcrWord("LUIS", 245, 311, 49, 18),
+            new CdcOcrWord("ANDRES", 302, 311, 88, 18),
+            new CdcOcrWord("FERRER", 65, 311, 72, 18),
+            new CdcOcrWord("32L", 592, 311, 37, 18),
+            new CdcOcrWord("10", 35, 311, 22, 18)
+        };
+        var rows = CdcOcrLayout.BuildRows(words);
+        var reader = new CdcBkupReader();
+        reader.AddPage(rows, 1);
+        Check(reader.Passengers.Count == 4 && reader.ExactCount == 3 &&
+            reader.NotDetectedCount == 1,
+            "CDC: Sabre column layout restores four passengers and their BKUP status");
+        Check(reader.Passengers.Any(p => p.Passenger == "TORRES/MARCOS" &&
+            p.Seat == "26L" && p.Status == CdcBkupStatus.Detected) &&
+            reader.Passengers.Any(p => p.Passenger == "FERRER/LUIS" &&
+                p.Seat == "32L" && p.Status == CdcBkupStatus.Detected),
+            "CDC: Sabre seats ending in L are recognized");
+        Check(reader.Passengers.Single(p => p.Passenger == "SILVA/RAMIRO")
+            .Status == CdcBkupStatus.NotDetected,
+            "CDC: BKUP from neighboring visual rows is never assigned to another passenger");
+        reader.AddPage(rows, 2);
+        Check(reader.Passengers.Count == 4,
+            "CDC: repeated Sabre screen does not double-count passengers");
+    }
+
     [STAThread]
     private static void Main()
     {
         TestStitching();
         TestCdcBkupReader();
+        TestCdcBkupSabreLayout();
         var scrollDelta = typeof(BubbleMainForm).GetMethod("EditsScrollDelta", BindingFlags.Static | BindingFlags.NonPublic)!;
         foreach (var lines in new[] { 1, 2, 3, 4, 5, 6 })
         {
