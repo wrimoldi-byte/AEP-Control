@@ -42,25 +42,25 @@ jobs:
       - name: Compilar ejecutable
         run: dotnet publish AEPControl/AEPControl.csproj --configuration Release --runtime win-x64 --self-contained true --output publish -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 
-      - name: Subir AEP Control v2.33.1 como artifact
+      - name: Subir AEP Control v2.33.2 como artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AEP-Control-v2.33.1-win-x64
+          name: AEP-Control-v2.33.2-win-x64
           path: publish/AEPControl.exe
           if-no-files-found: error
           retention-days: 30
 
-      - name: Crear o actualizar Release v2.33.1
+      - name: Crear o actualizar Release v2.33.2
         if: github.event_name != 'pull_request'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "v2.33.1"
+          $tag = "v2.33.2"
           $asset = "publish/AEPControl.exe"
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.33.1" --notes "Corrige scroll automático de EDITS con Gemini: rueda nativa, entrega dirigida y soporte para rueda Windows 1-6 líneas. Si Sabre no se mueve, ofrece captura manual asistida. CDC conserva scroll manual."
+            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --title "AEP Control v2.33.2" --notes "Mejora el análisis CDC BKUP en listas de pasajeros Sabre usando filas geométricas para unir nombre y EDIT; reconoce asientos terminados en L. CDC conserva scroll manual y revisión del operador."
           } else {
             gh release upload $tag $asset --repo $env:GITHUB_REPOSITORY --clobber
           }
