@@ -205,6 +205,31 @@ public static class OcrService
         return text;
     }
 
+    /// <summary>
+    /// OCR local de la lista de pasajeros de Sabre. Agrupa las palabras por
+    /// coordenadas de pantalla para que Nombre/Apellido y BKUP, separados por
+    /// varias columnas, queden en la misma fila lógica.
+    /// </summary>
+    public static async Task<string> ReadCdcRowsAsync(Bitmap bitmap)
+    {
+        if (bitmap.Width < 20 || bitmap.Height < 20)
+            return string.Empty;
+
+        using var enhanced = Enhance(bitmap, 2, 1.65f, false);
+        var engine = CreateEngines().FirstOrDefault().Engine;
+        if (engine is null)
+            throw new InvalidOperationException("Windows no tiene ningún idioma OCR instalado.");
+
+        var result = await RecognizeResultAsync(enhanced, engine);
+        var words = result.Lines.SelectMany(line => line.Words)
+            .Select(word => new CdcOcrWord(
+                word.Text, word.BoundingRect.X, word.BoundingRect.Y,
+                word.BoundingRect.Width, word.BoundingRect.Height));
+        var reconstructed = CdcOcrLayout.BuildRows(words);
+        LastRawText = reconstructed;
+        return reconstructed;
+    }
+
     private static IEnumerable<(string Language, OcrEngine Engine)> CreateEngines()
     {
         var created = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -236,6 +261,12 @@ public static class OcrService
 
     private static async Task<string> RecognizeAsync(Bitmap bitmap, OcrEngine engine)
     {
+        var result = await RecognizeResultAsync(bitmap, engine);
+        return result.Text?.Trim() ?? string.Empty;
+    }
+
+    private static async Task<OcrResult> RecognizeResultAsync(Bitmap bitmap, OcrEngine engine)
+    {
         using var ms = new MemoryStream();
         bitmap.Save(ms, ImageFormat.Png);
         ms.Position = 0;
@@ -248,8 +279,7 @@ public static class OcrService
         using var softwareBitmap = await decoder.GetSoftwareBitmapAsync(
             BitmapPixelFormat.Bgra8,
             BitmapAlphaMode.Premultiplied);
-        var result = await engine.RecognizeAsync(softwareBitmap);
-        return result.Text?.Trim() ?? string.Empty;
+        return await engine.RecognizeAsync(softwareBitmap);
     }
 
     private static Bitmap Enhance(Bitmap source, int scale, float contrast, bool threshold)

@@ -1,3 +1,11 @@
+## v2.33.2 — Corrección de CDC BKUP en Sabre
+
+- Reconoce numeración de fila confundida por OCR (`9` como `S`): ya no pierde a un pasajero cuyo número de fila fue leído como S.
+- Conserva segundos nombres, consolida capturas solapadas y recupera un asiento válido en una pantalla posterior.
+- Valida el asiento cuando está junto a la clase (`Y-A 22A`, `Y-S 30J`); si el OCR solo ve `1B` cerca del equipaje, deja el asiento vacío para revisión en lugar de atribuirlo erróneamente.
+- Pruebas de regresión con nombres ficticios y el formato de Sabre: 4 pasajeros, 4 BKUP.
+- La presencia de BKUP no reemplaza la revisión documental CDC.
+
 ## v2.33.1 — Corrección de scroll de Gemini en EDITS
 
 - La captura IA de EDITS intenta enfocar Sabre y mover la rueda con entrada nativa; si no detecta cambios, prueba mensajes de scroll dirigidos al control.

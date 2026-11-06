@@ -88,10 +88,93 @@ internal static class Program
         upgraded.AddPage("RUIZ/INES BKUP", 2);
         Check(upgraded.Findings.Count == 1 && upgraded.ExactCount == 1,
             "CDC: exact BKUP replaces prior uncertain reading for same identified passenger");
+        // Caso sintético basado en estructura de Sabre: 4 pasajeros con BKUP.
+        // Sabre puede mostrar 9 como S y el OCR suele perder el asiento antes
+        // de los datos de equipaje. Nunca interpretar "1B" como 30J.
+        var sabre = new CdcBkupReader();
+        sabre.AddPage(
+            "1 FARINA MARIO JUAN MR BC3 Y-A 22A 1 SL IB FF ET BKUP M ETI MC\n" +
+            "2 FARINA LUCIA MS BC3 Y-A 22C 1 SL IB ET BKUP F ETI MC\n" +
+            "S LORENZO SOFIA BELEN MS BC3 Y-A 22B 1 SL IB ET BKUP F ETI MC\n" +
+            "15 PERALTA JULIAN TOMAS MR MIA 1 1B FF ET BKUP M ETI MC", 1);
+        Check(sabre.Passengers.Count == 4 && sabre.ExactCount == 4 && sabre.UnidentifiedCount == 0,
+            "CDC: listado Sabre sintetico reconoce cuatro personas sin duplicados ni identidad ilegible");
+        Check(sabre.Passengers.Any(p => p.Passenger == "LORENZO/SOFIA BELEN" && p.Seat == "22B"),
+            "CDC: OCR de número 9 como S no descarta la fila del pasajero");
+        Check(sabre.Passengers.Single(p => p.Passenger == "PERALTA/JULIAN TOMAS").Seat == "",
+            "CDC: no interpreta 1B de equipaje como asiento si falta la clase");
+        sabre.AddPage(
+            "9 LORENZO SOFIA BELEN MS BC3 Y-A 22B 1 SL IB ET BKUP\n" +
+            "15 PERALTA JULIAN TOMAS MR MIA Y-S 30J 1 IB FF ET BKUP", 2);
+        Check(sabre.Passengers.Count == 4 && sabre.ExactCount == 4 &&
+            sabre.Passengers.Single(p => p.Passenger == "PERALTA/JULIAN TOMAS").Seat == "30J",
+            "CDC: solapamientos se fusionan y una lectura posterior recupera el asiento real");
+        var shorterNames = new CdcBkupReader();
+        shorterNames.AddPage("09 LORENZO SOFIA MS BC3 Y-A 22B BKUP", 1);
+        shorterNames.AddPage("S LORENZO SOFIA BELEN MS BC3 Y-A 22B BKUP", 2);
+        Check(shorterNames.Passengers.Count == 1 &&
+            shorterNames.Passengers[0].Passenger == "LORENZO/SOFIA BELEN",
+            "CDC: segundo nombre recuperado en captura posterior sin duplicar pasajero");
+        var sameFirstName = new CdcBkupReader();
+        sameFirstName.AddPage("1 GARCIA JUAN CARLOS MR Y-A 22A BKUP\n" +
+                              "2 GARCIA JUAN PEDRO MR Y-A 22C BKUP", 1);
+        Check(sameFirstName.Passengers.Count == 2,
+            "CDC: no fusiona dos pasajeros distintos con el mismo primer nombre");
         var empty = new CdcBkupReader();
         empty.AddPage("ROSA/PEDRO WCHR\nNONE BK-UP\nPARDO/CLARA", 1);
         Check(empty.Findings.Count == 0,
             "CDC: unrelated EDITS and broken tokens do not create confirmed CDC matches");
+    }
+
+    private static void TestCdcBkupSabreLayout()
+    {
+        // Windows OCR can emit separate blocks for name, seat and EDITS.
+        // Word positions must restore each on-screen Sabre row without
+        // attributing BKUP to passengers above or below the visual line.
+        var words = new[]
+        {
+            new CdcOcrWord("BKUP", 840, 100, 50, 18),
+            new CdcOcrWord("LUCIA", 245, 102, 68, 18),
+            new CdcOcrWord("23J", 592, 101, 37, 18),
+            new CdcOcrWord("NAVARRO", 65, 101, 70, 18),
+            new CdcOcrWord("1", 35, 101, 12, 18),
+
+            new CdcOcrWord("RAMIRO", 245, 169, 120, 18),
+            new CdcOcrWord("SILVA", 65, 170, 95, 18),
+            new CdcOcrWord("28H", 592, 169, 37, 18),
+            new CdcOcrWord("3", 35, 170, 12, 18),
+            new CdcOcrWord("ETI", 838, 171, 35, 18),
+
+            new CdcOcrWord("BKUP", 840, 240, 50, 18),
+            new CdcOcrWord("MARCOS", 245, 241, 94, 18),
+            new CdcOcrWord("TORRES", 65, 241, 77, 18),
+            new CdcOcrWord("26L", 592, 241, 37, 18),
+            new CdcOcrWord("9", 35, 241, 12, 18),
+
+            new CdcOcrWord("BKUP", 840, 310, 50, 18),
+            new CdcOcrWord("LUIS", 245, 311, 49, 18),
+            new CdcOcrWord("ANDRES", 302, 311, 88, 18),
+            new CdcOcrWord("FERRER", 65, 311, 72, 18),
+            new CdcOcrWord("32L", 592, 311, 37, 18),
+            new CdcOcrWord("10", 35, 311, 22, 18)
+        };
+        var rows = CdcOcrLayout.BuildRows(words);
+        var reader = new CdcBkupReader();
+        reader.AddPage(rows, 1);
+        Check(reader.Passengers.Count == 4 && reader.ExactCount == 3 &&
+            reader.NotDetectedCount == 1,
+            "CDC: Sabre column layout restores four passengers and their BKUP status");
+        Check(reader.Passengers.Any(p => p.Passenger == "TORRES/MARCOS" &&
+            p.Seat == "26L" && p.Status == CdcBkupStatus.Detected) &&
+            reader.Passengers.Any(p => p.Passenger == "FERRER/LUIS ANDRES" &&
+                p.Seat == "32L" && p.Status == CdcBkupStatus.Detected),
+            "CDC: Sabre seats ending in L are recognized");
+        Check(reader.Passengers.Single(p => p.Passenger == "SILVA/RAMIRO")
+            .Status == CdcBkupStatus.NotDetected,
+            "CDC: BKUP from neighboring visual rows is never assigned to another passenger");
+        reader.AddPage(rows, 2);
+        Check(reader.Passengers.Count == 4,
+            "CDC: repeated Sabre screen does not double-count passengers");
     }
 
     [STAThread]
@@ -99,6 +182,7 @@ internal static class Program
     {
         TestStitching();
         TestCdcBkupReader();
+        TestCdcBkupSabreLayout();
         var scrollDelta = typeof(BubbleMainForm).GetMethod("EditsScrollDelta", BindingFlags.Static | BindingFlags.NonPublic)!;
         foreach (var lines in new[] { 1, 2, 3, 4, 5, 6 })
         {
