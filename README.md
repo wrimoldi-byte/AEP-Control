@@ -1,3 +1,10 @@
+## v2.33.2 — BKUP: OCR por filas de Sabre
+
+- La verificación **CDC EE.UU. · BKUP** vuelve a juntar nombre, asiento y EDIT BKUP de una misma fila visual por las posiciones de las palabras. En la lista de pasajeros de Sabre, las columnas pueden estar muy separadas y Windows OCR antes devolvía bloques independientes que el lector no podía asociar.
+- Reconoce también asientos terminados en **L** (por ejemplo 26L y 32L).
+- Conserva la deduplicación por pasajero y el scroll **manual** del lector CDC. No atribuye BKUP de una línea no identificada al pasajero anterior; estos casos necesitan revisión.
+- La verificación OCR de un EDIT no acredita la documentación CDC: comprobarla según el procedimiento vigente de LATAM.
+
 ## v2.33.1 — Corrección de scroll de Gemini en EDITS
 
 - La captura IA de EDITS intenta enfocar Sabre y mover la rueda con entrada nativa; si no detecta cambios, prueba mensajes de scroll dirigidos al control.
