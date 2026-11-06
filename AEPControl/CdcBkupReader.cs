@@ -112,7 +112,8 @@ public sealed class CdcBkupReader
                 continue;
             }
 
-            if (passenger.Length > existing.Passenger.Length) existing.Passenger = passenger;\n            if (existing.Seat.Length == 0 && seat.Length != 0) existing.Seat = seat;
+            if (passenger.Length > existing.Passenger.Length) existing.Passenger = passenger;
+            if (existing.Seat.Length == 0 && seat.Length != 0) existing.Seat = seat;
             if (status > existing.Status)
             {
                 existing.Status = status;
