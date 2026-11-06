@@ -88,6 +88,38 @@ internal static class Program
         upgraded.AddPage("RUIZ/INES BKUP", 2);
         Check(upgraded.Findings.Count == 1 && upgraded.ExactCount == 1,
             "CDC: exact BKUP replaces prior uncertain reading for same identified passenger");
+        // Caso real LA592 (07NOV): 4 pasajeros, todos con BKUP.
+        // Sabre puede mostrar 9 como S y el OCR suele perder el asiento antes
+        // de los datos de equipaje. Nunca interpretar "1B" como 30J.
+        var sabre = new CdcBkupReader();
+        sabre.AddPage(
+            "1 ATKINSON EDUARDO JUAN MR BC3 Y-A 22A 1 SL IB FF ET BKUP M ETI MC\\n" +
+            "2 ATKINSON CATALINA MS BC3 Y-A 22C 1 SL IB ET BKUP F ETI MC\\n" +
+            "S FRANCO YANINA ANDREA MS BC3 Y-A 22B 1 SL IB ET BKUP F ETI MC\\n" +
+            "15 WAJNFELD ALAN PABLO MR MIA 1 1B FF ET BKUP M ETI MC", 1);
+        Check(sabre.Passengers.Count == 4 && sabre.ExactCount == 4 && sabre.UnidentifiedCount == 0,
+            "CDC: Sabre LA592 reconoce cuatro personas sin duplicados ni identidad ilegible");
+        Check(sabre.Passengers.Any(p => p.Passenger == "FRANCO/YANINA ANDREA" && p.Seat == "22B"),
+            "CDC: OCR de número 9 como S no descarta a Franco");
+        Check(sabre.Passengers.Single(p => p.Passenger == "WAJNFELD/ALAN PABLO").Seat == "",
+            "CDC: no interpreta 1B de equipaje como asiento si falta la clase");
+        sabre.AddPage(
+            "9 FRANCO YANINA ANDREA MS BC3 Y-A 22B 1 SL IB ET BKUP\\n" +
+            "15 WAJNFELD ALAN PABLO MR MIA Y-S 30J 1 IB FF ET BKUP", 2);
+        Check(sabre.Passengers.Count == 4 && sabre.ExactCount == 4 &&
+            sabre.Passengers.Single(p => p.Passenger == "WAJNFELD/ALAN PABLO").Seat == "30J",
+            "CDC: solapamientos se fusionan y una lectura posterior recupera el asiento real");
+        var shorterNames = new CdcBkupReader();
+        shorterNames.AddPage("09 FRANCO YANINA MS BC3 Y-A 22B BKUP", 1);
+        shorterNames.AddPage("S FRANCO YANINA ANDREA MS BC3 Y-A 22B BKUP", 2);
+        Check(shorterNames.Passengers.Count == 1 &&
+            shorterNames.Passengers[0].Passenger == "FRANCO/YANINA ANDREA",
+            "CDC: segundo nombre recuperado en captura posterior sin duplicar pasajero");
+        var sameFirstName = new CdcBkupReader();
+        sameFirstName.AddPage("1 GARCIA JUAN CARLOS MR Y-A 22A BKUP\\n" +
+                              "2 GARCIA JUAN PEDRO MR Y-A 22C BKUP", 1);
+        Check(sameFirstName.Passengers.Count == 2,
+            "CDC: no fusiona dos pasajeros distintos con el mismo primer nombre");
         var empty = new CdcBkupReader();
         empty.AddPage("ROSA/PEDRO WCHR\nNONE BK-UP\nPARDO/CLARA", 1);
         Check(empty.Findings.Count == 0,
