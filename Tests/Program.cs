@@ -166,7 +166,7 @@ internal static class Program
             "CDC: Sabre column layout restores four passengers and their BKUP status");
         Check(reader.Passengers.Any(p => p.Passenger == "TORRES/MARCOS" &&
             p.Seat == "26L" && p.Status == CdcBkupStatus.Detected) &&
-            reader.Passengers.Any(p => p.Passenger == "FERRER/LUIS" &&
+            reader.Passengers.Any(p => p.Passenger == "FERRER/LUIS ANDRES" &&
                 p.Seat == "32L" && p.Status == CdcBkupStatus.Detected),
             "CDC: Sabre seats ending in L are recognized");
         Check(reader.Passengers.Single(p => p.Passenger == "SILVA/RAMIRO")
