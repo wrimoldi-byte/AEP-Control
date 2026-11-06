@@ -93,9 +93,9 @@ internal static class Program
         // de los datos de equipaje. Nunca interpretar "1B" como 30J.
         var sabre = new CdcBkupReader();
         sabre.AddPage(
-            "1 ATKINSON EDUARDO JUAN MR BC3 Y-A 22A 1 SL IB FF ET BKUP M ETI MC\\n" +
-            "2 ATKINSON CATALINA MS BC3 Y-A 22C 1 SL IB ET BKUP F ETI MC\\n" +
-            "S FRANCO YANINA ANDREA MS BC3 Y-A 22B 1 SL IB ET BKUP F ETI MC\\n" +
+            "1 ATKINSON EDUARDO JUAN MR BC3 Y-A 22A 1 SL IB FF ET BKUP M ETI MC\n" +
+            "2 ATKINSON CATALINA MS BC3 Y-A 22C 1 SL IB ET BKUP F ETI MC\n" +
+            "S FRANCO YANINA ANDREA MS BC3 Y-A 22B 1 SL IB ET BKUP F ETI MC\n" +
             "15 WAJNFELD ALAN PABLO MR MIA 1 1B FF ET BKUP M ETI MC", 1);
         Check(sabre.Passengers.Count == 4 && sabre.ExactCount == 4 && sabre.UnidentifiedCount == 0,
             "CDC: Sabre LA592 reconoce cuatro personas sin duplicados ni identidad ilegible");
@@ -104,7 +104,7 @@ internal static class Program
         Check(sabre.Passengers.Single(p => p.Passenger == "WAJNFELD/ALAN PABLO").Seat == "",
             "CDC: no interpreta 1B de equipaje como asiento si falta la clase");
         sabre.AddPage(
-            "9 FRANCO YANINA ANDREA MS BC3 Y-A 22B 1 SL IB ET BKUP\\n" +
+            "9 FRANCO YANINA ANDREA MS BC3 Y-A 22B 1 SL IB ET BKUP\n" +
             "15 WAJNFELD ALAN PABLO MR MIA Y-S 30J 1 IB FF ET BKUP", 2);
         Check(sabre.Passengers.Count == 4 && sabre.ExactCount == 4 &&
             sabre.Passengers.Single(p => p.Passenger == "WAJNFELD/ALAN PABLO").Seat == "30J",
@@ -116,7 +116,7 @@ internal static class Program
             shorterNames.Passengers[0].Passenger == "FRANCO/YANINA ANDREA",
             "CDC: segundo nombre recuperado en captura posterior sin duplicar pasajero");
         var sameFirstName = new CdcBkupReader();
-        sameFirstName.AddPage("1 GARCIA JUAN CARLOS MR Y-A 22A BKUP\\n" +
+        sameFirstName.AddPage("1 GARCIA JUAN CARLOS MR Y-A 22A BKUP\n" +
                               "2 GARCIA JUAN PEDRO MR Y-A 22C BKUP", 1);
         Check(sameFirstName.Passengers.Count == 2,
             "CDC: no fusiona dos pasajeros distintos con el mismo primer nombre");
