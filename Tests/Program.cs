@@ -100,7 +100,7 @@ internal static class Program
         Check(sabre.Passengers.Count == 4 && sabre.ExactCount == 4 && sabre.UnidentifiedCount == 0,
             "CDC: listado Sabre sintetico reconoce cuatro personas sin duplicados ni identidad ilegible");
         Check(sabre.Passengers.Any(p => p.Passenger == "LORENZO/SOFIA BELEN" && p.Seat == "22B"),
-            "CDC: OCR de número 9 como S no descarta a Franco");
+            "CDC: OCR de número 9 como S no descarta la fila del pasajero");
         Check(sabre.Passengers.Single(p => p.Passenger == "PERALTA/JULIAN TOMAS").Seat == "",
             "CDC: no interpreta 1B de equipaje como asiento si falta la clase");
         sabre.AddPage(
