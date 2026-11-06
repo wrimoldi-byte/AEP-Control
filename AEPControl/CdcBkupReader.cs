@@ -17,7 +17,10 @@ public sealed class CdcBkupReader
     private static readonly Regex NumberedName = new(
         @"^\s*(?:(?:\d{1,3}|[SIOB])\s*[.)-]?\s+)(?<last>[A-ZÀ-Ü]{3,})\s+(?<first>[A-ZÀ-Ü]{3,})(?:\s+(?<middle>[A-ZÀ-Ü]{3,}))?\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    // Solo la columna Asiento se encuentra tras la clase/tarifa (Y-A 22A, Y-S 30J).\n    // Un 1B aislado puede ser una lectura de equipaje, no un asiento.\n    private static readonly Regex SeatNearClass = new(@"\b[YWJ]\s*-\s*[A-Z0-9]\s+(?<seat>\d{1,2}[A-HJ-L])\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);\n    private static readonly Regex Seat = new(@"\b(?<seat>\d{1,2}[A-HJ-L])\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // Solo la columna Asiento se encuentra tras la clase/tarifa (Y-A 22A, Y-S 30J).
+    // Un 1B aislado puede ser una lectura de equipaje, no un asiento.
+    private static readonly Regex SeatNearClass = new(@"\b[YWJ]\s*-\s*[A-Z0-9]\s+(?<seat>\d{1,2}[A-HJ-L])\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex Seat = new(@"\b(?<seat>\d{1,2}[A-HJ-L])\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly HashSet<string> NotNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "SSR", "EDIT", "EDITS", "PAX", "DOCS", "PASSENGER", "SEAT", "ASIENTO", "BKUP",
