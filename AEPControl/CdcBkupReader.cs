@@ -93,6 +93,13 @@ public sealed class CdcBkupReader
             // inmediatamente después del nombre, sin la clase Y-A.
             if (!seatMatch.Success && name.Success)
                 seatMatch = Seat.Match(line[(name.Index + name.Length)..]);
+            // Cuando la tabla OCR reconstruida omite la clase y el tratamiento,
+            // admitir un asiento inmediatamente después del nombre. Con MR/MS
+            // presente, sin contexto de clase, un código como "1B" puede ser
+            // equipaje: en ese caso no asignar asiento automáticamente.
+            if (!seatMatch.Success && numbered.Success &&
+                !Regex.IsMatch(line, @"\b(?:MR|MS|MRS|MSTR)\b"))
+                seatMatch = Seat.Match(line[(numbered.Index + numbered.Length)..]);
             var seat = seatMatch.Success ? seatMatch.Groups["seat"].Value : "";
             var status = exact ? CdcBkupStatus.Detected
                 : uncertain ? CdcBkupStatus.Uncertain : CdcBkupStatus.NotDetected;
