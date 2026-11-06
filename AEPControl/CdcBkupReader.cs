@@ -17,7 +17,7 @@ public sealed class CdcBkupReader
     private static readonly Regex NumberedName = new(
         @"^\s*(?:\d{1,3}\s*[.)-]?\s+)(?<last>[A-ZÀ-Ü]{3,})\s+(?<first>[A-ZÀ-Ü]{3,})(?:\s+(?<middle>[A-ZÀ-Ü]{3,}))?\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex Seat = new(@"\b(?<seat>\d{1,2}[A-K])\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex Seat = new(@"\b(?<seat>\d{1,2}[A-HJ-L])\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly HashSet<string> NotNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "SSR", "EDIT", "EDITS", "PAX", "DOCS", "PASSENGER", "SEAT", "ASIENTO", "BKUP",
@@ -339,7 +339,7 @@ public sealed partial class BubbleMainForm
                 using var image = CaptureArea(area);
                 if (lastScreen is null || !FramesAreSimilar(lastScreen, image))
                 {
-                    var text = await OcrService.ReadContinuousAsync(image);
+                    var text = await OcrService.ReadCdcRowsAsync(image);
                     reader.AddPage(text, ++screensRead);
                     lastScreen?.Dispose();
                     lastScreen = (Bitmap)image.Clone();
