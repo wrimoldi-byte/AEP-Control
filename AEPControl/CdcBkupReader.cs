@@ -15,9 +15,9 @@ public sealed class CdcBkupReader
     private static readonly Regex SlashName = new(@"\b(?<last>[A-ZÀ-Ü]{2,})\s*/\s*(?<first>[A-ZÀ-Ü]{2,})\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex NumberedName = new(
-        @"^\s*(?:\d{1,3}\s*[.)-]?\s+)(?<last>[A-ZÀ-Ü]{3,})\s+(?<first>[A-ZÀ-Ü]{3,})(?:\s+(?<middle>[A-ZÀ-Ü]{3,}))?\b",
+        @"^\s*(?:(?:\d{1,3}|[SIOB])\s*[.)-]?\s+)(?<last>[A-ZÀ-Ü]{3,})\s+(?<first>[A-ZÀ-Ü]{3,})(?:\s+(?<middle>[A-ZÀ-Ü]{3,}))?\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex Seat = new(@"\b(?<seat>\d{1,2}[A-K])\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // Solo la columna Asiento se encuentra tras la clase/tarifa (Y-A 22A, Y-S 30J).\n    // Un 1B aislado puede ser una lectura de equipaje, no un asiento.\n    private static readonly Regex SeatNearClass = new(@"\b[YWJ]\s*-\s*[A-Z0-9]\s+(?<seat>\d{1,2}[A-K])\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);\n    private static readonly Regex Seat = new(@"\b(?<seat>\d{1,2}[A-K])\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly HashSet<string> NotNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "SSR", "EDIT", "EDITS", "PAX", "DOCS", "PASSENGER", "SEAT", "ASIENTO", "BKUP",
@@ -40,6 +40,20 @@ public sealed class CdcBkupReader
     public int ExactCount => _passengers.Count(p => p.Status == CdcBkupStatus.Detected);
     public int PossibleCount => _passengers.Count(p => p.Status == CdcBkupStatus.Uncertain);
     public int NotDetectedCount => _passengers.Count(p => p.Status == CdcBkupStatus.NotDetected);
+
+    // Variaciones entre pantallas: el OCR puede omitir el segundo nombre.
+    // No unir dos pasajeros con segundos nombres diferentes ni asientos incompatibles.
+    private static bool SamePassenger(string first, string second)
+    {
+        if (first == second) return true;
+        var a = first.Split('/', 2);
+        var b = second.Split('/', 2);
+        if (a.Length != 2 || b.Length != 2 || a[0] != b[0]) return false;
+        var aNames = a[1].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var bNames = b[1].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (aNames.Length == 0 || bNames.Length == 0 || aNames[0] != bNames[0]) return false;
+        return aNames.Length == 1 || bNames.Length == 1 || a[1] == b[1];
+    }
 
     public void AddPage(string ocrText, int pageNumber)
     {
@@ -70,20 +84,28 @@ public sealed class CdcBkupReader
             }
 
             var passenger = matchedName.Groups["last"].Value + "/" + matchedName.Groups["first"].Value;
-            var seatMatch = Seat.Match(line);
+            // Conservá el segundo nombre visible para distinguir homónimos.
+            if (numbered.Success && numbered.Groups["middle"].Success)
+                passenger += " " + numbered.Groups["middle"].Value;
+
+            var seatMatch = SeatNearClass.Match(line);
+            // En registros con barra (LOPEZ/MARIA 4A), el asiento puede estar
+            // inmediatamente después del nombre, sin la clase Y-A.
+            if (!seatMatch.Success && name.Success)
+                seatMatch = Seat.Match(line[(name.Index + name.Length)..]);
             var seat = seatMatch.Success ? seatMatch.Groups["seat"].Value : "";
             var status = exact ? CdcBkupStatus.Detected
                 : uncertain ? CdcBkupStatus.Uncertain : CdcBkupStatus.NotDetected;
 
             var existing = _passengers.FirstOrDefault(p =>
-                p.Passenger == passenger && (p.Seat == seat || p.Seat.Length == 0 || seat.Length == 0));
+                SamePassenger(p.Passenger, passenger) && (p.Seat == seat || p.Seat.Length == 0 || seat.Length == 0));
             if (existing is null)
             {
                 _passengers.Add(new CdcPassengerEntry(passenger, seat, pageNumber, line, status));
                 continue;
             }
 
-            if (existing.Seat.Length == 0 && seat.Length != 0) existing.Seat = seat;
+            if (passenger.Length > existing.Passenger.Length) existing.Passenger = passenger;\n            if (existing.Seat.Length == 0 && seat.Length != 0) existing.Seat = seat;
             if (status > existing.Status)
             {
                 existing.Status = status;
@@ -103,7 +125,7 @@ public enum CdcBkupStatus
 
 public sealed class CdcPassengerEntry
 {
-    public string Passenger { get; }
+    public string Passenger { get; set; }
     public string Seat { get; set; }
     public int Page { get; set; }
     public string Evidence { get; set; }
